@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>My Route · Dash Trash Pickup</title>
+<link rel="icon" type="image/png" href="/images/logo/favicon-32.png" />
+<link rel="stylesheet" href="/dashboard/dash.css" />
+</head>
+<body class="emp">
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img src="/images/logo/mark-128-dark.png" alt="" />
+      <span>Dash<small>Employee</small></span>
+    </div>
+    <div class="topbar-right">
+      <span data-user-name class="hide-desktop"></span>
+      <button class="linkbtn" data-logout>Sign out</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- TODAY -->
+    <section data-panel="today">
+      <div class="card clock-card" id="clockCard">
+        <div class="clock-state" id="clockState">Loading…</div>
+        <div class="clock-timer" id="clockTimer">--:--</div>
+        <div class="clock-since" id="clockSince"></div>
+        <button class="btn clock-btn clock-in-btn" id="clockBtn">Clock In</button>
+        <p class="msg error" id="clockError" hidden></p>
+        <div class="pay-strip">
+          <div><div class="k">Hours</div><div class="v" id="periodHours">—</div></div>
+          <div><div class="k">Shifts</div><div class="v" id="periodShifts">—</div></div>
+          <div><div class="k">Est. pay</div><div class="v" id="periodPay">—</div></div>
+        </div>
+        <p class="muted small" id="periodRange" style="margin:9px 0 0"></p>
+      </div>
+
+      <div class="card" id="progressCard" style="margin-top:14px">
+        <div class="progress-head" id="progressText">Loading…</div>
+        <div class="muted small" id="routeMeta"></div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+      </div>
+      <div id="stopList" style="margin-top:14px"></div>
+    </section>
+
+    <!-- UNITS inside a community -->
+    <section data-panel="units" hidden>
+      <button class="btn" id="backToRoute" style="margin-bottom:12px">← Back to route</button>
+      <div class="card" style="margin-bottom:14px">
+        <h2 id="unitsTitle"></h2>
+        <div class="muted small" id="unitsMeta"></div>
+      </div>
+      <div id="unitList"></div>
+    </section>
+
+    <!-- COMPLETED -->
+    <section data-panel="completed" hidden>
+      <h1>Completed</h1>
+      <div id="completedList"></div>
+    </section>
+
+    <!-- ISSUES -->
+    <section data-panel="issues" hidden>
+      <h1>Reported issues</h1>
+      <div id="issuesList"></div>
+    </section>
+
+    <!-- HOURS -->
+    <section data-panel="hours" hidden>
+      <h1>My hours</h1>
+      <div class="card" id="hoursSummary"></div>
+      <div id="shiftList" style="margin-top:14px"></div>
+    </section>
+
+    <!-- PROFILE -->
+    <section data-panel="profile" hidden>
+      <h1>Profile</h1>
+      <div class="card" id="profileCard"></div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button data-tab="today"     aria-selected="true"><span class="ico">📍</span>Today</button>
+    <button data-tab="completed"><span class="ico">✓</span>Completed</button>
+    <button data-tab="hours"><span class="ico">⏱</span>Hours</button>
+    <button data-tab="issues"><span class="ico">⚠</span>Issues</button>
+    <button data-tab="profile"><span class="ico">👤</span>Profile</button>
+  </nav>
+
+<script type="module" src="/dashboard/employee/employee.js"></script>
+</body>
+</html>

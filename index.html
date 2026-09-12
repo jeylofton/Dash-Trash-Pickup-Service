@@ -41,6 +41,10 @@
   }
   </script>
   <link rel="stylesheet" href="styles.css" />
+  <script id="squareSdk"
+          src="https://sandbox.web.squarecdn.com/v1/square.js"
+          data-sandbox-src="https://sandbox.web.squarecdn.com/v1/square.js"
+          data-production-src="https://web.squarecdn.com/v1/square.js"></script>
   <script src="scripts.js" defer></script>
 </head>
 <body>
@@ -57,6 +61,19 @@
         <a href="#plans">Plans</a>
         <a href="#faq">FAQ</a>
         <a href="#contact">Contact</a>
+        <div class="portal-menu" data-portal-menu>
+          <button class="portal-trigger" data-portal-trigger aria-expanded="false" aria-haspopup="true">
+            Portal <span aria-hidden="true">▾</span>
+          </button>
+          <div class="portal-dropdown" data-portal-dropdown hidden role="menu">
+            <a role="menuitem" href="/dashboard/login.html?role=customer">
+              <strong>Customer Login</strong><span>Plan, billing, and service history</span></a>
+            <a role="menuitem" href="/dashboard/login.html?role=employee">
+              <strong>Employee Login</strong><span>Routes, pickups, and time clock</span></a>
+            <a role="menuitem" href="/dashboard/login.html?role=admin">
+              <strong>Admin Login</strong><span>Operations and financials</span></a>
+          </div>
+        </div>
         <a class="btn btn-primary" href="#signup">Start Service</a>
       </nav>
       <button class="menu-btn" id="menuBtn" aria-label="Open menu" aria-expanded="false" aria-controls="navLinks">☰</button>
@@ -428,9 +445,22 @@
               <div class="payment-stub">
                 <p class="payment-total">Due today: <strong data-review="total">&mdash;</strong></p>
                 <p class="payment-plan" data-review="planSummary"></p>
-                <div class="payment-placeholder">
-                  <strong>Payment processor not connected</strong>
-                  <span>This demo intentionally collects no card details. Mount Stripe Checkout, Square, or your processor&rsquo;s hosted form here so card data never touches this page.</span>
+                <p class="payment-renewal" data-review="renewal"></p>
+                <!-- Square renders its card inputs inside this element as a secure
+                     iframe. Card numbers go straight to Square, never to this page. -->
+                <div class="card-field">
+                  <label class="card-field-label" for="card-container">Card details</label>
+                  <div id="card-container" data-card-container></div>
+                  <p class="card-field-error" data-payment-error hidden></p>
+                  <p class="card-field-secure">
+                    <span aria-hidden="true">&#128274;</span>
+                    Card details are encrypted by Square and never stored on this site.
+                  </p>
+                </div>
+
+                <div class="payment-placeholder" data-payment-demo hidden>
+                  <strong>Demo mode &mdash; payment server not connected</strong>
+                  <span>Start the Square backend (<code>cd server &amp;&amp; npm start</code>) to take real sandbox payments. Until then, signup completes without charging anything.</span>
                 </div>
               </div>
             </fieldset>
@@ -460,7 +490,7 @@
   <footer>
     <div class="container footer-grid">
       <div><strong>Dash Trash Pickup</strong><br><span>Cleaner Communities. Happier Living. • Columbus, Georgia</span></div>
-      <div class="footer-links"><a href="#how">How It Works</a><a href="#plans">Plans</a><a href="#faq">FAQ</a><a href="#contact">Contact</a></div>
+      <div class="footer-links"><a href="#how">How It Works</a><a href="#plans">Plans</a><a href="#faq">FAQ</a><a href="#contact">Contact</a><a href="/dashboard/login.html">Portal</a></div>
       <div>© <span id="year"></span> All rights reserved.</div>
     </div>
   </footer>

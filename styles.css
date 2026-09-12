@@ -152,6 +152,27 @@ header {
 .nav-links a:hover { color: white; }
 .menu-btn { display: none; border: 0; background: none; color: white; font-size: 1.65rem; cursor: pointer; }
 
+/* ---------- portal menu ---------- */
+.portal-menu { position: relative; }
+.portal-trigger {
+  background: none; border: 0; cursor: pointer;
+  color: #d7dce1; font-weight: 700; font-size: .94rem;
+  display: inline-flex; align-items: center; gap: 5px; padding: 0;
+}
+.portal-trigger:hover, .portal-trigger[aria-expanded="true"] { color: #fff; }
+.portal-dropdown {
+  position: absolute; top: calc(100% + 14px); right: 0; z-index: 60;
+  min-width: 248px; padding: 7px;
+  background: var(--white); border-radius: 14px;
+  box-shadow: 0 18px 44px rgba(0,0,0,.34);
+}
+.portal-dropdown a {
+  display: block; padding: 10px 12px; border-radius: 9px; color: var(--ink);
+}
+.portal-dropdown a:hover { background: var(--sand); }
+.portal-dropdown strong { display: block; font-size: .92rem; }
+.portal-dropdown span { display: block; color: var(--muted); font-size: .78rem; font-weight: 600; }
+
 /* ---------- 7. Hero ---------- */
 .hero {
   position: relative;
@@ -563,6 +584,21 @@ footer { background: #111418; color: #aab2ba; padding: 42px 0; }
 .confirmation h4 { font-size: 1.3rem; margin: 0 0 10px; }
 .confirmation p { color: var(--muted); margin: 0 0 10px; }
 .confirmation-note { font-size: .78rem; }
+
+/* Square card field (the inputs themselves live in Square's iframe) */
+.card-field { display: grid; gap: 8px; }
+.card-field-label { font-size: .87rem; font-weight: 800; }
+#card-container { min-height: 62px; }
+.card-field-error { color: #b3261e; font-size: .86rem; font-weight: 700; margin: 0; }
+.card-field-secure {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0; color: var(--muted); font-size: .78rem;
+}
+.payment-renewal {
+  margin: 0; padding: 11px 13px; border-radius: 11px;
+  background: rgba(241,84,31,.07); color: var(--orange-dark);
+  font-size: .85rem; font-weight: 700;
+}
 
 .price-sub { color: #9da6af; font-size: .82rem; margin-top: -2px; }
 

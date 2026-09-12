@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Admin · Dash Trash Pickup</title>
+<link rel="icon" type="image/png" href="/images/logo/favicon-32.png" />
+<link rel="stylesheet" href="/dashboard/dash.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img src="/images/logo/mark-128-dark.png" alt="" />
+      <span>Dash Trash Pickup<small>Operations</small></span>
+    </div>
+    <div class="topbar-right">
+      <span class="role-chip">Admin</span>
+      <span data-user-name></span>
+      <button class="linkbtn" data-logout>Sign out</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="dashboard">Dashboard</button>
+    <button data-tab="customers">Customers</button>
+    <button data-tab="communities">Communities</button>
+    <button data-tab="routes">Routes</button>
+    <button data-tab="employees">Employees</button>
+    <button data-tab="pickups">Pickups</button>
+    <button data-tab="payments">Payments</button>
+    <button data-tab="financials">Financials</button>
+    <button data-tab="expenses">Expenses</button>
+    <button data-tab="payroll">Payroll</button>
+    <button data-tab="reports">Reports</button>
+  </nav>
+
+  <main>
+    <section data-panel="dashboard">
+      <h1 id="dashTitle">Today</h1>
+      <div class="stat-grid" id="statGrid"></div>
+      <div class="card" style="margin-top:16px">
+        <h2>Recent activity</h2>
+        <div class="table-wrap"><table id="auditTable"></table></div>
+      </div>
+    </section>
+
+    <section data-panel="customers" hidden>
+      <h1>Customers</h1>
+      <div class="toolbar">
+        <div style="flex:2 1 260px">
+          <label for="custSearch">Search</label>
+          <input id="custSearch" placeholder="Name, email, unit, or community" />
+        </div>
+        <div><label for="custStatus">Status</label>
+          <select id="custStatus"><option value="">All</option><option>active</option><option>paused</option><option>cancelled</option></select></div>
+        <div><label for="custPlan">Plan</label>
+          <select id="custPlan"><option value="">All</option><option>Introductory</option><option>Monthly</option><option>Quarterly</option><option>Annual</option></select></div>
+      </div>
+      <div class="card"><div class="table-wrap"><table id="custTable"></table></div></div>
+    </section>
+
+    <section data-panel="communities" hidden>
+      <h1>Communities</h1>
+      <div class="card"><div class="table-wrap"><table id="commTable"></table></div></div>
+      <div class="card" id="commDetail" hidden></div>
+    </section>
+
+    <section data-panel="routes" hidden>
+      <h1>Routes</h1>
+      <div class="card"><div class="table-wrap"><table id="routeTable"></table></div></div>
+      <div class="card" id="routeDetail" hidden></div>
+    </section>
+
+    <section data-panel="employees" hidden>
+      <h1>Employees</h1>
+      <div class="card"><div class="table-wrap"><table id="empTable"></table></div></div>
+    </section>
+
+    <section data-panel="pickups" hidden>
+      <h1>Pickups</h1>
+      <div class="toolbar">
+        <div style="flex:0 1 200px"><label for="pickupDate">Service date</label><input id="pickupDate" type="date" /></div>
+      </div>
+      <div class="stat-grid" id="pickupStats" style="margin-bottom:14px"></div>
+      <div class="card"><div class="table-wrap"><table id="pickupTable"></table></div></div>
+    </section>
+
+    <section data-panel="payments" hidden>
+      <h1>Payments</h1>
+      <div class="toolbar">
+        <div style="flex:0 1 200px"><label for="payStatus">Status</label>
+          <select id="payStatus"><option value="">All</option><option>paid</option><option>pending</option><option>past_due</option><option>failed</option></select></div>
+      </div>
+      <div class="card"><div class="table-wrap"><table id="payTable"></table></div></div>
+    </section>
+
+    <section data-panel="financials" hidden>
+      <h1>Financials</h1>
+      <div class="range-bar" data-range-bar>
+        <button data-range="30d">30 days</button>
+        <button data-range="90d" aria-selected="true">90 days</button>
+        <button data-range="month">This month</button>
+        <button data-range="quarter">Quarter</button>
+        <button data-range="ytd">Year to date</button>
+        <button data-range="12m">12 months</button>
+      </div>
+      <div id="finAlerts"></div>
+      <div class="stat-grid" id="finStats"></div>
+      <div class="card" style="margin-top:16px"><div id="chartOverTime"></div></div>
+      <div class="chart-grid" style="margin-top:14px">
+        <div class="card"><div id="chartRevCommunity"></div></div>
+        <div class="card"><div id="chartProfitCommunity"></div></div>
+        <div class="card"><div id="chartRevRoute"></div></div>
+        <div class="card"><div id="chartProfitRoute"></div></div>
+        <div class="card"><div id="chartExpenseCat"></div></div>
+        <div class="card"><div id="chartLabor"></div></div>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <h2>Break-even by route</h2>
+        <div class="table-wrap"><table id="breakEvenTable"></table></div>
+      </div>
+      <div class="card">
+        <h2>Pricing simulator</h2>
+        <p class="muted small">What margin would each monthly price have produced over this period,
+          holding today&rsquo;s cost structure and customer count constant? An analysis tool —
+          it changes nothing for customers.</p>
+        <div class="table-wrap"><table id="pricingTable"></table></div>
+      </div>
+    </section>
+
+    <section data-panel="expenses" hidden>
+      <h1>Expenses</h1>
+      <div class="card">
+        <h2>Record an expense</h2>
+        <div class="row">
+          <div><label for="expCat">Category</label><select id="expCat"></select></div>
+          <div><label for="expDesc">Description</label><input id="expDesc" placeholder="Truck payment" /></div>
+          <div><label for="expAmount">Amount</label><input id="expAmount" type="number" step="0.01" min="0" placeholder="230.00" /></div>
+          <div><label for="expDate">Date</label><input id="expDate" type="date" /></div>
+        </div>
+        <div class="row">
+          <div><label for="expVendor">Vendor</label><input id="expVendor" placeholder="Progressive" /></div>
+          <div><label for="expRoute">Route (optional)</label><select id="expRoute"><option value="">Overhead</option></select></div>
+          <div><label for="expCommunity">Community (optional)</label><select id="expCommunity"><option value="">Overhead</option></select></div>
+          <div><label for="expRecurring">Recurring</label>
+            <select id="expRecurring"><option value="">One-time</option><option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="annual">Annual</option></select></div>
+          <div style="flex:0 0 auto"><button class="btn btn-primary" id="addExpense">Add</button></div>
+        </div>
+        <p class="msg" id="expMsg" hidden></p>
+      </div>
+      <div class="card"><div class="table-wrap"><table id="expTable"></table></div></div>
+    </section>
+
+    <section data-panel="payroll" hidden>
+      <h1>Payroll</h1>
+      <div class="toolbar">
+        <div style="flex:0 1 170px"><label for="prFrom">From</label><input id="prFrom" type="date" /></div>
+        <div style="flex:0 1 170px"><label for="prTo">To</label><input id="prTo" type="date" /></div>
+        <div style="flex:0 0 auto"><button class="btn" id="prLoad">Load</button></div>
+        <div style="flex:0 0 auto"><a class="btn" id="prCsv" href="#" download>Export CSV</a></div>
+      </div>
+      <div class="card"><div class="table-wrap"><table id="payrollTable"></table></div></div>
+      <div class="card">
+        <h2>Compensation</h2>
+        <div class="row">
+          <div><label for="compEmp">Employee</label><select id="compEmp"></select></div>
+          <div><label for="compType">Pay type</label><select id="compType"><option value="hourly">Hourly</option><option value="daily">Daily / shift</option></select></div>
+          <div><label for="compRate">Rate</label><input id="compRate" type="number" step="0.01" min="0" placeholder="18.00" /></div>
+          <div style="flex:0 0 auto"><button class="btn btn-primary" id="compSave">Set rate</button></div>
+        </div>
+        <p class="msg" id="compMsg" hidden></p>
+        <p class="muted small">A new rate applies from today forward. Shifts already worked keep the
+          rate that was in force when they were clocked, so payroll never changes retroactively.</p>
+      </div>
+      <div class="card">
+        <h2>Timesheets</h2>
+        <div class="table-wrap"><table id="timesheetTable"></table></div>
+      </div>
+      <div class="card">
+        <h2>Employee performance</h2>
+        <div class="table-wrap"><table id="perfTable"></table></div>
+      </div>
+    </section>
+
+    <section data-panel="reports" hidden>
+      <h1>Reports</h1>
+      <div class="card">
+        <h2>Open issues</h2>
+        <div class="table-wrap"><table id="issueTable"></table></div>
+      </div>
+    </section>
+  </main>
+
+<script type="module" src="/dashboard/admin/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+# macOS metadata (this project lives on an exFAT drive)
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Secrets - NEVER commit these
+server/.env
+.env
+
+# Dependencies
+node_modules/
+
+# Local signup data
+server/data/
+
+# Database and uploaded photos
+server/data/
+*.db
+*.db-wal
+*.db-shm

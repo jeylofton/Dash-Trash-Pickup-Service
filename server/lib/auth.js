@@ -1,0 +1,102 @@
+/* ============================================================
+   Passwords and sessions.
+
+   Passwords: scrypt from node:crypto. Deliberately slow, salted
+   per user, and compared in constant time.
+
+   Sessions: a random token in an httpOnly cookie. Only the SHA-256
+   of the token is stored, so a database dump yields no usable
+   sessions. httpOnly means page scripts cannot read it, which is
+   what makes an XSS bug non-fatal.
+   ============================================================ */
+
+import { randomBytes, scrypt as _scrypt, timingSafeEqual, createHash, randomUUID } from 'node:crypto';
+import { promisify } from 'node:util';
+import { one, run } from '../db/index.js';
+
+const scrypt = promisify(_scrypt);
+const KEYLEN = 64;
+const SESSION_DAYS = 14;
+export const COOKIE_NAME = 'dash_session';
+
+export async function hashPassword(password) {
+  const salt = randomBytes(16).toString('hex');
+  const key = await scrypt(password, salt, KEYLEN);
+  return `scrypt$${salt}$${key.toString('hex')}`;
+}
+
+export async function verifyPassword(password, stored) {
+  try {
+    const [scheme, salt, hex] = String(stored).split('$');
+    if (scheme !== 'scrypt' || !salt || !hex) return false;
+    const key = await scrypt(password, salt, KEYLEN);
+    const expected = Buffer.from(hex, 'hex');
+    return key.length === expected.length && timingSafeEqual(key, expected);
+  } catch {
+    return false;
+  }
+}
+
+export function passwordProblem(password) {
+  if (typeof password !== 'string' || password.length < 10) {
+    return 'Password must be at least 10 characters.';
+  }
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) {
+    return 'Password must contain both letters and numbers.';
+  }
+  return null;
+}
+
+const sha256 = (s) => createHash('sha256').update(s).digest('hex');
+
+export function createSession(userId, { ip, userAgent } = {}) {
+  const token = randomBytes(32).toString('base64url');
+  const expires = new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString();
+  run(
+    `INSERT INTO sessions (id, user_id, token_hash, expires_at, ip, user_agent)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    randomUUID(), userId, sha256(token), expires, ip || null, userAgent || null
+  );
+  return { token, expires };
+}
+
+export function userForToken(token) {
+  if (!token) return null;
+  const row = one(
+    `SELECT u.id, u.email, u.role, u.first_name, u.last_name, u.phone, u.status,
+            s.id AS session_id, s.expires_at
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+      WHERE s.token_hash = ?`,
+    sha256(token)
+  );
+  if (!row) return null;
+  if (new Date(row.expires_at) < new Date()) {
+    run('DELETE FROM sessions WHERE id = ?', row.session_id);
+    return null;
+  }
+  if (row.status !== 'active') return null;   // suspended mid-session
+  return row;
+}
+
+export function destroySession(token) {
+  if (token) run('DELETE FROM sessions WHERE token_hash = ?', sha256(token));
+}
+
+export function destroyAllSessions(userId) {
+  run('DELETE FROM sessions WHERE user_id = ?', userId);
+}
+
+export function purgeExpiredSessions() {
+  run(`DELETE FROM sessions WHERE expires_at < datetime('now')`);
+}
+
+export function cookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: SESSION_DAYS * 86400_000,
+    path: '/',
+  };
+}

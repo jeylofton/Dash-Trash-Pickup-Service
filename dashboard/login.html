@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sign in · Dash Trash Pickup</title>
+<link rel="icon" type="image/png" href="/images/logo/favicon-32.png" />
+<link rel="stylesheet" href="/dashboard/dash.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-logo">
+        <img src="/images/logo/mark-128.png" alt="" />
+        <span>Dash Trash Pickup<small class="muted small" style="display:block;font-weight:700">Staff &amp; customer portal</small></span>
+      </div>
+
+      <form id="loginForm" novalidate>
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="username" required />
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+        </div>
+        <p class="msg error" id="loginError" hidden></p>
+        <button class="btn btn-primary" style="width:100%" type="submit" id="loginBtn">Sign in</button>
+      </form>
+
+      <div class="demo-creds">
+        <strong>Demo accounts</strong> — password <code data-fill-pw>DashDemo2026</code><br />
+        <code data-fill="admin@dashtrashpickup.com">admin@dashtrashpickup.com</code> — admin<br />
+        <code data-fill="marcus@dashtrashpickup.com">marcus@dashtrashpickup.com</code> — employee<br />
+        <code data-fill="john.smith0@example.com">john.smith0@example.com</code> — customer
+        <p class="small" style="margin:9px 0 0">Click an address to fill the form.</p>
+      </div>
+    </div>
+  </div>
+
+<script type="module">
+  import { api, $, $$ } from '/dashboard/dash.js';
+
+  $$('[data-fill]').forEach(el => el.addEventListener('click', () => {
+    $('#email').value = el.dataset.fill;
+    $('#password').value = 'DashDemo2026';
+    $('#password').focus();
+  }));
+
+  $('#loginForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#loginBtn'), err = $('#loginError');
+    err.hidden = true; btn.disabled = true; btn.textContent = 'Signing in…';
+    try {
+      const res = await api('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: $('#email').value, password: $('#password').value }),
+      });
+      location.href = res.redirect;
+    } catch (ex) {
+      err.textContent = ex.message; err.hidden = false;
+      btn.disabled = false; btn.textContent = 'Sign in';
+    }
+  });
+</script>
+</body>
+</html>

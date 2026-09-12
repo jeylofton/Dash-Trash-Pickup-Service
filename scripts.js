@@ -5,7 +5,7 @@
    Contents
      1. CONFIG  <-- change pricing, the intro offer, and the schedule HERE
      2. Derived pricing helpers
-     3. Backend seams (swap these for real API calls)
+     3. Backend (Square) + Web Payments SDK
      4. Render: prices, schedule, spots remaining
      5. Introductory offer modal
      6. Signup flow (plan -> info -> address -> availability -> payment -> done)
@@ -50,6 +50,22 @@
       days: ['Tuesday', 'Thursday'],
       perWeek: 2,
       varianceNote: 'Pickup days may vary by community or service area.',
+    },
+
+    /* ---- Payment backend ----
+       Where the Square server lives. Leave as '' when the API is served from
+       the same origin as this page. If the API runs elsewhere, put its base
+       URL here (and add this site's origin to ALLOWED_ORIGINS in server/.env).
+
+       If the server is unreachable, the site falls back to demo mode: the
+       signup flow still works end to end but nothing is charged. */
+    api: {
+      // '' means "same origin as this page" - correct once the site and the
+      // API are deployed together. During local development the site is on
+      // one port and the API on another, so localhost is redirected below.
+      baseUrl: '',
+      localDevUrl: 'http://localhost:3000',
+      enabled: true,         // false = force demo mode
     },
 
     /* ---- Service area (used by the availability step) ---- */
@@ -105,39 +121,156 @@
   };
 
   /* ============================================================
-     3. Backend seams
-     Replace the bodies of these three functions with real calls.
-     Everything else on the page already reads from them.
+     3. Backend (Square) - with demo fallback
+
+     Every call goes through api(). If the server is not reachable,
+     DEMO_MODE flips on and the flow still completes without charging.
      ============================================================ */
 
-  // GET /api/intro-spots  ->  { claimed: number }
-  async function fetchIntroSpots() {
-    // DEMO ONLY. Counts completed signups stored in this browser.
-    const local = Number(localStorage.getItem('dtp_demo_signups') || 0);
-    const seeded = 27; // pretend 27 people already paid
-    return { claimed: Math.min(seeded + local, CONFIG.intro.totalSpots) };
-  }
+  const isLocalDev = ['localhost', '127.0.0.1'].includes(location.hostname)
+    && location.port !== new URL(CONFIG.api.localDevUrl).port;
+  const API = (isLocalDev ? CONFIG.api.localDevUrl : CONFIG.api.baseUrl).replace(/\/$/, '');
+  let DEMO_MODE = !CONFIG.api.enabled;
+  let squareConfig = null;   // { applicationId, locationId, environment }
 
-  // POST /api/checkout  ->  { ok, confirmationId, introApplied }
-  // A spot is consumed HERE - on completed payment - never on clicking the offer.
-  async function submitSignup(data) {
-    // DEMO ONLY. No payment is processed and no card data is collected.
-    const spots = await fetchIntroSpots();
-    const introApplied = data.plan === 'Introductory' && spots.claimed < CONFIG.intro.totalSpots;
-    if (introApplied) {
-      localStorage.setItem('dtp_demo_signups',
-        String(Number(localStorage.getItem('dtp_demo_signups') || 0) + 1));
+  async function api(path, options = {}) {
+    const res = await fetch(`${API}${path}`, {
+      headers: { 'Content-Type': 'application/json' },
+      ...options,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error || `Request failed (${res.status})`);
+      err.code = data.code;
+      err.status = res.status;
+      throw err;
     }
-    return {
-      ok: true,
-      confirmationId: 'DEMO-' + Math.random().toString(36).slice(2, 8).toUpperCase(),
-      introApplied,
-    };
+    return data;
   }
 
-  // GET /api/service-area?zip=  ->  { available: boolean }
+  /** Ask the server for the publishable Square IDs. Failure => demo mode. */
+  async function loadSquareConfig() {
+    if (!CONFIG.api.enabled) return null;
+    try {
+      const cfg = await api('/api/config');
+      if (!cfg.applicationId || !cfg.locationId) throw new Error('Square not configured');
+      squareConfig = cfg;
+      DEMO_MODE = false;
+      return cfg;
+    } catch (err) {
+      console.warn('[Dash] Payment server unavailable - running in demo mode.', err.message);
+      DEMO_MODE = true;
+      return null;
+    }
+  }
+
+  async function fetchIntroSpots() {
+    if (!DEMO_MODE) {
+      try { return await api('/api/intro-spots'); }
+      catch (err) { console.warn('[Dash] spot count failed', err.message); }
+    }
+    const local = Number(localStorage.getItem('dtp_demo_signups') || 0);
+    return { claimed: Math.min(27 + local, CONFIG.intro.totalSpots) };
+  }
+
   async function checkServiceArea(zip) {
+    if (!DEMO_MODE) {
+      try { return await api(`/api/service-area?zip=${encodeURIComponent(zip)}`); }
+      catch (err) { console.warn('[Dash] area check failed', err.message); }
+    }
     return { available: CONFIG.serviceArea.zips.includes(String(zip).trim()) };
+  }
+
+  /**
+   * Completes the signup.
+   * `sourceId` is Square's single-use card token, produced in the browser by
+   * the Web Payments SDK. A raw card number never passes through this function.
+   */
+  async function submitSignup(data, sourceId) {
+    if (DEMO_MODE) {
+      const spots = await fetchIntroSpots();
+      const introApplied = data.plan === 'Introductory' && spots.claimed < CONFIG.intro.totalSpots;
+      if (introApplied) {
+        localStorage.setItem('dtp_demo_signups',
+          String(Number(localStorage.getItem('dtp_demo_signups') || 0) + 1));
+      }
+      return { ok: true, confirmationId: 'DEMO-' + Math.random().toString(36).slice(2, 8).toUpperCase(), introApplied, demo: true };
+    }
+    return api('/api/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ ...data, sourceId }),
+    });
+  }
+
+  /* ---------- Square Web Payments SDK ---------- */
+  let squareCard = null;      // the mounted card element
+  let squareCardReady = false;
+
+  /** Point the SDK <script> at the right CDN for this environment, then load it. */
+  function loadSquareSdk(environment) {
+    const tag = document.getElementById('squareSdk');
+    if (!tag) return Promise.reject(new Error('Square SDK script tag missing'));
+
+    const wanted = environment === 'production'
+      ? tag.dataset.productionSrc
+      : tag.dataset.sandboxSrc;
+
+    if (window.Square && tag.src === wanted) return Promise.resolve();
+
+    return new Promise((resolve, reject) => {
+      const fresh = document.createElement('script');
+      fresh.src = wanted;
+      fresh.onload = resolve;
+      fresh.onerror = () => reject(new Error('Could not load the Square SDK'));
+      tag.replaceWith(fresh);
+      fresh.id = 'squareSdk';
+      fresh.dataset.sandboxSrc = tag.dataset.sandboxSrc;
+      fresh.dataset.productionSrc = tag.dataset.productionSrc;
+    });
+  }
+
+  /** Mount Square's card iframe into #card-container. Safe to call repeatedly. */
+  async function mountSquareCard() {
+    if (DEMO_MODE || squareCardReady || !squareConfig) return;
+    const container = $('[data-card-container]');
+    if (!container) return;
+
+    try {
+      await loadSquareSdk(squareConfig.environment);
+      const payments = window.Square.payments(squareConfig.applicationId, squareConfig.locationId);
+      squareCard = await payments.card({
+        style: {
+          input: { fontSize: '15px', color: '#171a1f' },
+          '.input-container': { borderColor: '#d7d2cb', borderRadius: '13px' },
+          '.input-container.is-focus': { borderColor: '#f1541f' },
+          '.input-container.is-error': { borderColor: '#b3261e' },
+          '.message-text.is-error': { color: '#b3261e' },
+        },
+      });
+      await squareCard.attach('#card-container');
+      squareCardReady = true;
+    } catch (err) {
+      console.error('[Dash] Square card failed to mount', err);
+      showPaymentError('Could not load the secure card form. Please refresh and try again.');
+    }
+  }
+
+  /** Turn the entered card into a single-use token. */
+  async function tokenizeCard() {
+    if (!squareCardReady || !squareCard) throw new Error('The card form is not ready yet.');
+    const result = await squareCard.tokenize();
+    if (result.status !== 'OK') {
+      const detail = result.errors?.[0]?.message || 'Please check your card details.';
+      throw new Error(detail);
+    }
+    return result.token;
+  }
+
+  function showPaymentError(message) {
+    const el = $('[data-payment-error]');
+    if (!el) return;
+    el.textContent = message || '';
+    el.hidden = !message;
   }
 
   /* ============================================================
@@ -359,27 +492,65 @@
     $('[data-review="planSummary"]').textContent = p
       ? `${v.plan} plan · ${p.months === 1 ? 'billed monthly' : `covers ${p.months} months`} · ${CONFIG.schedule.perWeek} pickups per week`
       : 'A team member will contact you with community-wide pricing.';
+
+    // Say plainly that this recurs - a subscription should never be a surprise.
+    const renewal = $('[data-review="renewal"]');
+    if (renewal) {
+      const period = p && p.months === 1 ? 'month' : p ? `${p.months} months` : null;
+      renewal.textContent = p
+        ? `Renews automatically every ${period} at ${money(p.total)} until you cancel. Cancel anytime.`
+        : '';
+    }
+
+    showPaymentError('');
+    const demoNote = $('[data-payment-demo]');
+    const cardField = $('.card-field');
+    if (demoNote) demoNote.hidden = !DEMO_MODE;
+    if (cardField) cardField.hidden = DEMO_MODE;
+    mountSquareCard();
   }
 
   async function completeSignup() {
     const v = values();
     const next = $('[data-step-next]');
     next.disabled = true;
-    next.textContent = 'Submitting…';
+    showPaymentError('');
 
-    const res = await submitSignup(v);
+    let res;
+    try {
+      let sourceId = null;
+      if (!DEMO_MODE) {
+        next.textContent = 'Verifying card…';
+        sourceId = await tokenizeCard();
+      }
+      next.textContent = 'Submitting…';
+      res = await submitSignup(v, sourceId);
+    } catch (err) {
+      next.disabled = false;
+      next.textContent = 'Complete signup';
+      showPaymentError(err.message);
+
+      // The introductory offer ran out while they were filling the form.
+      if (err.code === 'INTRO_SOLD_OUT') {
+        await renderSpots();
+        selectPlan('Monthly');
+        showStep(1);
+      }
+      return;
+    }
 
     next.disabled = false;
-    if (!res.ok) { next.textContent = 'Complete signup'; return; }
+    if (!res || !res.ok) { next.textContent = 'Complete signup'; return; }
 
     await renderSpots();
 
     $('[data-confirm-heading]').textContent = res.introApplied
       ? 'Your introductory rate is locked in'
       : 'Service request received';
+    const demoSuffix = res.demo ? ' (demo — no payment was processed)' : '';
     $('[data-confirm-body]').textContent = res.introApplied
-      ? `Confirmation ${res.confirmationId}. You're one of the first ${CONFIG.intro.totalSpots} customers at ${money(CONFIG.intro.price)}/month. Standard pickup is ${scheduleDays()}.`
-      : `Confirmation ${res.confirmationId}. We'll email ${v.email || 'you'} with your pickup schedule. Standard pickup is ${scheduleDays()}.`;
+      ? `Confirmation ${res.confirmationId}. You're one of the first ${CONFIG.intro.totalSpots} customers at ${money(CONFIG.intro.price)}/month. Standard pickup is ${scheduleDays()}.${demoSuffix}`
+      : `Confirmation ${res.confirmationId}. We'll email ${v.email || 'you'} with your pickup schedule. Standard pickup is ${scheduleDays()}.${demoSuffix}`;
 
     showStep(LAST_STEP);
   }
@@ -435,6 +606,26 @@
   });
 
   /* ============================================================
+     7a. Portal menu
+     ============================================================ */
+  const portalTrigger = $('[data-portal-trigger]');
+  const portalDropdown = $('[data-portal-dropdown]');
+  if (portalTrigger && portalDropdown) {
+    const setPortal = (open) => {
+      portalDropdown.hidden = !open;
+      portalTrigger.setAttribute('aria-expanded', String(open));
+    };
+    portalTrigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setPortal(portalDropdown.hidden);
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('[data-portal-menu]')) setPortal(false);
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setPortal(false); });
+  }
+
+  /* ============================================================
      7. Mobile navigation toggle
      ============================================================ */
   const menuBtn = document.getElementById('menuBtn');
@@ -457,7 +648,9 @@
   /* ---------- boot ---------- */
   renderSchedule();
   renderPricing();
-  renderSpots().then(() => {
+  (async () => {
+    await loadSquareConfig();     // decides live vs demo mode
+    await renderSpots();
     if (shouldShowPromo()) setTimeout(openPromo, CONFIG.intro.popupDelayMs);
-  });
+  })();
 })();

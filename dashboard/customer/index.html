@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>My Account · Dash Trash Pickup</title>
+<link rel="icon" type="image/png" href="/images/logo/favicon-32.png" />
+<link rel="stylesheet" href="/dashboard/dash.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <img src="/images/logo/mark-128-dark.png" alt="" />
+      <span>Dash Trash Pickup<small>My account</small></span>
+    </div>
+    <div class="topbar-right">
+      <span data-user-name></span>
+      <button class="linkbtn" data-logout>Sign out</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button data-tab="account">My Account</button>
+    <button data-tab="plan">My Plan</button>
+    <button data-tab="payments">Payments</button>
+    <button data-tab="schedule">Pickup Schedule</button>
+    <button data-tab="history">Service History</button>
+    <button data-tab="support">Support</button>
+  </nav>
+
+  <main style="max-width:900px">
+    <section data-panel="account">
+      <h1>My account</h1>
+      <div class="stat-grid" id="acctStats"></div>
+      <div class="card" style="margin-top:14px">
+        <h2>Contact details</h2>
+        <div class="row">
+          <div><label for="acctEmail">Email</label><input id="acctEmail" type="email" /></div>
+          <div><label for="acctPhone">Phone</label><input id="acctPhone" type="tel" /></div>
+          <div style="flex:0 0 auto"><button class="btn btn-primary" id="saveProfile">Save</button></div>
+        </div>
+        <p class="msg ok" id="profileMsg" hidden></p>
+      </div>
+      <div class="card"><h2>Service address</h2><div id="addressBox"></div></div>
+    </section>
+
+    <section data-panel="plan" hidden>
+      <h1>My plan</h1>
+      <div class="card" id="currentPlan"></div>
+      <div class="card"><h2>Change plan</h2><div id="planOptions"></div>
+        <p class="msg" id="planMsg" hidden></p></div>
+    </section>
+
+    <section data-panel="payments" hidden>
+      <h1>Payments</h1>
+      <div class="card"><div class="table-wrap"><table id="payTable"></table></div></div>
+      <div class="card">
+        <h2>Payment method</h2>
+        <p class="muted small">Card details are held securely by our payment processor and are never
+          stored on this site. Use the button below to replace the card on file.</p>
+        <button class="btn" id="updateCard">Update payment method</button>
+        <p class="msg" id="cardMsg" hidden></p>
+      </div>
+    </section>
+
+    <section data-panel="schedule" hidden>
+      <h1>Pickup schedule</h1>
+      <div class="card" id="scheduleBox"></div>
+    </section>
+
+    <section data-panel="history" hidden>
+      <h1>Service history</h1>
+      <div class="card"><div class="table-wrap"><table id="histTable"></table></div></div>
+    </section>
+
+    <section data-panel="support" hidden>
+      <h1>Support</h1>
+      <div class="card">
+        <h2>Contact us</h2>
+        <p class="small">Phone <strong>(706) 555-0148</strong> · Email <strong>hello@dashtrashpickup.com</strong><br />
+          Monday–Friday, 9:00 AM–5:00 PM</p>
+      </div>
+      <div class="card"><h2>Notes from our team</h2><div id="notesBox"></div></div>
+      <div class="card">
+        <h2>Cancel service</h2>
+        <p class="small muted">Cancelling stops future billing and ends pickups at the end of your current term.</p>
+        <div class="field"><label for="cancelReason">Reason (optional)</label>
+          <input id="cancelReason" placeholder="Tell us why you're leaving" /></div>
+        <button class="btn btn-danger" id="cancelBtn">Request cancellation</button>
+        <p class="msg" id="cancelMsg" hidden></p>
+      </div>
+    </section>
+  </main>
+
+<script type="module" src="/dashboard/customer/customer.js"></script>
+</body>
+</html>
