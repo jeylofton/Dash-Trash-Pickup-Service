@@ -19,6 +19,9 @@ db.exec('PRAGMA busy_timeout = 5000');
 export function migrate() {
   db.exec(readFileSync(join(HERE, 'schema.sql'), 'utf8'));
   db.exec(readFileSync(join(HERE, 'schema_finance.sql'), 'utf8'));
+  db.exec(readFileSync(join(HERE, 'schema_admin.sql'), 'utf8'));
+  db.exec(readFileSync(join(HERE, 'schema_discounts.sql'), 'utf8'));
+  db.exec(readFileSync(join(HERE, 'schema_communities.sql'), 'utf8'));
 }
 
 /* Small helpers so route code reads cleanly. */

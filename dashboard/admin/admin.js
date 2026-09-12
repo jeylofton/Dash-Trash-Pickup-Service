@@ -62,40 +62,176 @@ async function loadCustomers() {
 }
 
 /* ---------- communities ---------- */
+const COMM_PILL = {
+  active:'ok', scheduled:'pending', driver_needed:'bad', waiting_list:'warn',
+  pending_setup:'warn', lead:'', paused:'warn', inactive:'',
+};
+const commStatus = (st) => `<span class="pill ${COMM_PILL[st] ?? ''}">${esc(String(st).replace(/_/g,' '))}</span>`;
+
 async function loadCommunities() {
-  const rows = await api('/api/admin/communities');
-  $('#commTable').innerHTML = table(['Community', 'Type', 'Address', 'Units', 'Occupied', 'Pickup days'],
-    rows.map(c => `<tr style="cursor:pointer" data-comm="${c.id}">
+  const params = new URLSearchParams();
+  if ($('#commStatusFilter').value) params.set('status', $('#commStatusFilter').value);
+
+  const [rows, board] = await Promise.all([
+    api('/api/communities?' + params),
+    api('/api/communities/board/driver-needed'),
+  ]);
+
+  $('#driverTable').innerHTML = table(
+    ['Community', 'Status', 'Reason', 'Units', 'Waiting list', 'Tentative start', 'Potential revenue'],
+    board.map(c => `<tr>
       <td><strong>${esc(c.name)}</strong></td>
-      <td class="small">${esc(c.kind)}</td>
-      <td class="small muted">${esc(c.street || '')} ${esc(c.zip || '')}</td>
-      <td class="num">${c.unit_count}</td>
-      <td class="num">${c.occupied_count}</td>
-      <td class="small">${esc(c.scheduleDays.join(' & ') || '—')}</td>
+      <td>${commStatus(c.status)}</td>
+      <td class="small muted">${esc(c.waitingReason || '')}</td>
+      <td class="num">${c.units ?? '—'}</td>
+      <td class="num">${c.waitlistCount}</td>
+      <td class="small">${c.tentativeStartDate ? fmtDate(c.tentativeStartDate) : '—'}</td>
+      <td class="num">${money(c.potentialMonthlyRevenue)}/mo</td>
     </tr>`).join(''));
 
-  $$('#commTable [data-comm]').forEach(tr =>
-    tr.addEventListener('click', () => showCommunity(tr.dataset.comm)));
+  $('#commTable').innerHTML = table(
+    ['Community', 'Status', 'Address', 'Units', 'Occupied', 'Waiting', 'Pickup days', 'Start', ''],
+    rows.map(c => `<tr>
+      <td><strong>${esc(c.name)}</strong><br /><span class="small muted">${esc(c.kind)}</span></td>
+      <td>${commStatus(c.status)}</td>
+      <td class="small muted">${esc(c.street || '')} ${esc(c.zip || '')}</td>
+      <td class="num">${c.unit_count || (c.unit_count_estimate ? c.unit_count_estimate + '*' : '—')}</td>
+      <td class="num">${c.occupied_count}</td>
+      <td class="num">${c.waitlist_count}</td>
+      <td class="small">${esc(c.scheduleDays.join(' & ') || '—')}</td>
+      <td class="small">${c.actual_start_date ? fmtDate(c.actual_start_date)
+          : c.tentative_start_date ? `<em>${fmtDate(c.tentative_start_date)}</em>` : '—'}</td>
+      <td><button class="btn small" data-comm="${c.id}">Open</button></td>
+    </tr>`).join(''));
+
+  $$('#commTable [data-comm]').forEach(b =>
+    b.addEventListener('click', () => showCommunity(b.dataset.comm)));
 }
 
 async function showCommunity(id) {
-  const d = await api(`/api/admin/communities/${id}`);
+  const [d, readiness] = await Promise.all([
+    api(`/api/communities/${id}`),
+    api(`/api/communities/${id}/readiness`),
+  ]);
+  const c = d.community;
   const box = $('#commDetail');
   box.hidden = false;
+
   box.innerHTML = `
-    <h2>${esc(d.community.name)}</h2>
-    <p class="muted small">${esc(d.community.street || '')} · Pickup: ${
-      d.schedule.map(s => esc(s.name)).join(' & ') || 'not set'}</p>
-    <h3 style="margin-top:14px">Units (${d.units.length})</h3>
-    <div class="table-wrap"><table>${table(['Unit', 'Building', 'Occupant', 'Status'],
-      d.units.map(u => `<tr>
-        <td><strong>${esc(u.label)}</strong></td>
-        <td class="small">${esc(u.building_name || '—')}</td>
-        <td class="small">${u.first_name ? esc(u.first_name) + ' ' + esc(u.last_name) : '<span class="muted">Vacant</span>'}</td>
-        <td>${statusPill(u.status)}</td>
-      </tr>`).join(''))}</table></div>`;
+    <h2>${esc(c.name)} ${commStatus(c.status)}</h2>
+    <p class="muted small">${esc([c.street, c.city, c.state, c.zip].filter(Boolean).join(', '))}
+      ${c.contact_name ? ` · Manager: ${esc(c.contact_name)}` : ''}
+      ${c.contact_phone ? ` · ${esc(c.contact_phone)}` : ''}</p>
+
+    ${c.status !== 'active' ? `
+      <div class="card" style="background:var(--sand)">
+        <h3>Start service</h3>
+        <p class="small">${c.tentative_start_date
+          ? `Tentative start <strong>${fmtDate(c.tentative_start_date)}</strong> — tentative only; it does not activate anything.`
+          : 'No tentative start date set.'}</p>
+        <div style="margin:10px 0">
+          ${readiness.checks.map(ck =>
+            `<div class="small">${ck.ok ? '✅' : '⬜'} ${esc(ck.label)}</div>`).join('')}
+        </div>
+        <div class="row">
+          <div><label for="actualStart">Actual start date</label><input id="actualStart" type="date" /></div>
+          <div style="flex:0 0 auto"><button class="btn btn-primary" id="activateBtn"
+            ${readiness.ready ? '' : 'title="Some checks are not met"'}>Activate community</button></div>
+        </div>
+        <p class="msg" id="activateMsg" hidden></p>
+      </div>` : `
+      <p class="small">Servicing since <strong>${c.actual_start_date ? fmtDate(c.actual_start_date) : '—'}</strong>.</p>`}
+
+    <div class="chart-grid" style="margin-top:14px">
+      <div class="card">
+        <h3>Waiting list (${d.waitlist.length})</h3>
+        ${d.waitlist.length ? `<div class="table-wrap"><table>${table(['Name','Email','Unit','Status'],
+          d.waitlist.map(w => `<tr>
+            <td>${esc(w.first_name)} ${esc(w.last_name)}</td>
+            <td class="small">${esc(w.email)}</td>
+            <td class="small">${esc(w.unit_label || '—')}</td>
+            <td>${statusPill(w.status)}</td>
+          </tr>`).join(''))}</table></div>` : '<p class="muted small">Nobody waiting.</p>'}
+      </div>
+      <div class="card">
+        <h3>Routes</h3>
+        ${d.routes.length ? d.routes.map(r => `<div class="small">• ${esc(r.name)} (${esc(r.dayName)})
+          — ${r.first_name ? esc(r.first_name) + ' ' + esc(r.last_name) : '<span class="pill bad">no driver</span>'}</div>`).join('')
+          : '<p class="muted small">Not on any route.</p>'}
+        <h3 style="margin-top:12px">Status history</h3>
+        ${d.statusHistory.map(h => `<div class="small muted">${fmtDate(h.created_at)}:
+          ${esc(h.from_status || 'new')} → <strong>${esc(h.to_status)}</strong>
+          ${h.note ? '· ' + esc(h.note) : ''}</div>`).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Units (${d.units.length})</h3>
+      <div class="table-wrap"><table>${table(['Unit','Building','Occupant','Status'],
+        d.units.map(u => `<tr>
+          <td><strong>${esc(u.label)}</strong></td>
+          <td class="small">${esc(u.building_name || '—')}</td>
+          <td class="small">${u.first_name ? esc(u.first_name) + ' ' + esc(u.last_name)
+              : '<span class="muted">Vacant</span>'}</td>
+          <td>${statusPill(u.status)}</td>
+        </tr>`).join(''))}</table></div>
+    </div>`;
+
+  const btn = $('#activateBtn');
+  if (btn) btn.addEventListener('click', async () => {
+    const msg = $('#activateMsg');
+    const date = $('#actualStart').value;
+    if (!date) { msg.textContent = 'Choose an actual start date.'; msg.className = 'msg error'; msg.hidden = false; return; }
+    if (!confirm(`Start service at ${c.name} on ${date}? This begins real pickups.`)) return;
+    try {
+      const r = await api(`/api/communities/${id}/activate`, {
+        method: 'POST', body: JSON.stringify({ actualStartDate: date }),
+      });
+      msg.textContent = `Activated. ${r.waitlistNotified} waiting-list contact(s) marked notified.`;
+      msg.className = 'msg ok'; msg.hidden = false;
+      loadCommunities(); setTimeout(() => showCommunity(id), 800);
+    } catch (e) {
+      if (e.status === 409) {
+        if (!confirm('Some readiness checks are not met. Activate anyway?')) return;
+        await api(`/api/communities/${id}/activate`, {
+          method: 'POST', body: JSON.stringify({ actualStartDate: date, force: true }),
+        });
+        loadCommunities(); showCommunity(id);
+      } else { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
+    }
+  });
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+
+$('#commStatusFilter').addEventListener('change', loadCommunities);
+$('#newCommBtn').addEventListener('click', () => {
+  const c = $('#newCommCard'); c.hidden = !c.hidden;
+});
+$('#ncoCancel').addEventListener('click', () => { $('#newCommCard').hidden = true; });
+$('#ncoSave').addEventListener('click', async () => {
+  const msg = $('#ncoMsg');
+  try {
+    const r = await api('/api/communities', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: $('#ncoName').value, kind: $('#ncoKind').value,
+        street: $('#ncoStreet').value || undefined, zip: $('#ncoZip').value || undefined,
+        contactName: $('#ncoContact').value || undefined,
+        contactPhone: $('#ncoPhone').value || undefined,
+        contactEmail: $('#ncoEmail').value || undefined,
+        status: $('#ncoStatus').value,
+        unitCountEstimate: $('#ncoUnits').value || undefined,
+        potentialCustomers: $('#ncoPotential').value || undefined,
+        tentativeStartDate: $('#ncoTentative').value || undefined,
+        waitingReason: $('#ncoReason').value || undefined,
+      }),
+    });
+    msg.textContent = r.message; msg.className = 'msg ok'; msg.hidden = false;
+    ['ncoName','ncoStreet','ncoZip','ncoContact','ncoPhone','ncoEmail','ncoUnits','ncoPotential','ncoReason']
+      .forEach(i => { $('#' + i).value = ''; });
+    loadCommunities();
+  } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
+});
 
 /* ---------- routes ---------- */
 let employeeCache = [];
@@ -153,18 +289,388 @@ async function showRoute(id) {
 }
 
 /* ---------- employees ---------- */
+const EMP_STATUS_PILL = { active:'ok', inactive:'', on_leave:'warn', terminated:'bad', archived:'bad' };
+const fmtStatus = (st) => `<span class="pill ${EMP_STATUS_PILL[st] ?? ''}">${esc(String(st).replace('_',' '))}</span>`;
+const hrs = (mins) => (mins / 60).toFixed(1);
+
 async function loadEmployees() {
-  const rows = await api('/api/admin/employees');
-  $('#empTable').innerHTML = table(['Employee', 'Contact', 'Code', 'Routes', 'Last login', 'Status'],
+  $('#empListView').hidden = false;
+  $('#empDetailView').hidden = true;
+
+  const params = new URLSearchParams();
+  if ($('#empSearch').value) params.set('q', $('#empSearch').value);
+  if ($('#empStatusFilter').value) params.set('status', $('#empStatusFilter').value);
+
+  const rows = await api('/api/people/employees?' + params);
+  $('#empTable').innerHTML = table(
+    ['Employee', 'Contact', 'Code', 'Title', 'Routes', 'Last login', 'Status', ''],
     rows.map(e => `<tr>
-      <td><strong>${esc(e.first_name)} ${esc(e.last_name)}</strong></td>
+      <td><strong>${esc(e.first_name)} ${esc(e.last_name)}</strong>
+        ${e.must_change_password ? '<span class="pill warn">password reset pending</span>' : ''}
+        ${e.locked_until && new Date(e.locked_until) > new Date() ? '<span class="pill bad">locked</span>' : ''}</td>
       <td class="small">${esc(e.email)}<br /><span class="muted">${esc(e.phone || '')}</span></td>
       <td class="small">${esc(e.employee_code || '—')}</td>
+      <td class="small">${esc(e.job_title || '—')}</td>
       <td class="num">${e.active_routes}</td>
       <td class="small muted">${e.last_login_at ? fmtDate(e.last_login_at) : 'never'}</td>
-      <td>${statusPill(e.status)}</td>
+      <td>${fmtStatus(e.status)}</td>
+      <td><button class="btn small" data-emp="${e.id}">Open</button></td>
     </tr>`).join(''));
+
+  $$('#empTable [data-emp]').forEach(b =>
+    b.addEventListener('click', () => showEmployee(b.dataset.emp)));
 }
+
+async function showEmployee(id) {
+  const d = await api(`/api/people/employees/${id}`);
+  const e = d.employee, p = d.profile, pay = d.pay;
+  $('#empListView').hidden = true;
+  const box = $('#empDetailView');
+  box.hidden = false;
+
+  box.innerHTML = `
+    <button class="btn" id="backToEmps" style="margin-bottom:12px">← All employees</button>
+    <div class="card">
+      <div class="row" style="align-items:flex-start">
+        <div style="flex:2 1 300px">
+          <h1 style="margin-bottom:4px">${esc(e.first_name)} ${esc(e.last_name)}</h1>
+          <p class="muted small">${esc(p.job_title || 'Employee')} · ${esc(e.employee_code || 'no code')}
+            · hired ${fmtDate(e.hire_date)}</p>
+          <p>${fmtStatus(e.status)} ${e.locked_until && new Date(e.locked_until) > new Date()
+              ? '<span class="pill bad">account locked</span>' : ''}
+            ${e.must_change_password ? '<span class="pill warn">must change password</span>' : ''}</p>
+        </div>
+        <div style="flex:0 0 auto"><button class="btn btn-primary" id="editEmpBtn">Edit employee</button></div>
+      </div>
+    </div>
+
+    <div class="chart-grid">
+      <div class="card">
+        <h2>Profile</h2>
+        <table>
+          <tr><th>Email</th><td>${esc(e.email)}</td></tr>
+          <tr><th>Phone</th><td>${esc(e.phone || '—')}</td></tr>
+          <tr><th>Address</th><td>${esc([p.address, p.city, p.state, p.zip].filter(Boolean).join(', ') || '—')}</td></tr>
+          <tr><th>Emergency</th><td>${esc(p.emergency_contact_name || '—')}${p.emergency_contact_phone ? ' · ' + esc(p.emergency_contact_phone) : ''}</td></tr>
+          <tr><th>Vehicle</th><td>${esc(p.vehicle_assignment || '—')}</td></tr>
+          <tr><th>Uniform</th><td>${esc(p.uniform_size || '—')}</td></tr>
+          <tr><th>Background check</th><td>${esc(p.background_check_status || 'not started')}</td></tr>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Pay</h2>
+        <p class="stat-value" style="color:var(--orange-dark);font-size:1.6rem">
+          ${money(pay.current.rate_cents / 100)}
+          <span class="small muted">${pay.current.pay_type === 'daily' ? 'per shift' : 'per hour'}</span></p>
+        <p class="small"><strong>This pay period:</strong> ${pay.payPeriod.hours} h ·
+          ${pay.payPeriod.shifts} shifts · <strong>${money(pay.payPeriod.estimatedPay)}</strong> estimated</p>
+        <h3 style="margin-top:12px">Rate history</h3>
+        <table>${pay.history.map(h => `<tr>
+          <td>${money(h.rate_cents / 100)} ${esc(h.pay_type)}</td>
+          <td class="small muted">${fmtDate(h.effective_date)} → ${h.end_date ? fmtDate(h.end_date) : 'present'}</td>
+        </tr>`).join('') || '<tr><td class="muted small">No rate set.</td></tr>'}</table>
+        <p class="muted small" style="margin-top:8px">Changing the rate never re-prices shifts already worked.</p>
+      </div>
+
+      <div class="card">
+        <h2>Time</h2>
+        <div class="pay-strip">
+          <div><div class="k">Today</div><div class="v">${hrs(d.time.todayMinutes)}h</div></div>
+          <div><div class="k">This week</div><div class="v">${hrs(d.time.weekMinutes)}h</div></div>
+          <div><div class="k">Pay period</div><div class="v">${pay.payPeriod.hours}h</div></div>
+        </div>
+        <h3 style="margin-top:12px">Clock history</h3>
+        <div class="table-wrap"><table>${table(['Date','In','Out','Hrs','Pay',''],
+          d.time.entries.slice(0, 12).map(t => `<tr>
+            <td class="small">${fmtDate(t.work_date)}</td>
+            <td class="small">${fmtTime(t.clock_in_at)}</td>
+            <td class="small">${t.clock_out_at ? fmtTime(t.clock_out_at) : '<em>open</em>'}</td>
+            <td class="num">${hrs(t.minutes)}</td>
+            <td class="num">${money(t.pay)}</td>
+            <td>${t.source === 'admin' ? '<span class="pill warn">edited</span>' : ''}</td>
+          </tr>`).join(''))}</table></div>
+      </div>
+
+      <div class="card">
+        <h2>Routes</h2>
+        ${d.routes.assignments.length ? d.routes.assignments.map(a => `
+          <div class="small" style="padding:5px 0;border-bottom:1px solid var(--line)">
+            <strong>${esc(a.name)}</strong> — ${esc(a.dayName)}
+            ${a.current ? '<span class="pill ok">current</span>'
+                        : `<span class="muted">ended ${fmtDate(a.end_date)}</span>`}
+            ${a.reason ? `<br /><span class="muted">${esc(a.reason)}</span>` : ''}
+          </div>`).join('') : '<p class="muted small">No route assignments.</p>'}
+        <h3 style="margin-top:12px">Communities served</h3>
+        <p class="small">${d.routes.communities.map(c => esc(c.name)).join(', ') || '<span class="muted">None</span>'}</p>
+      </div>
+
+      <div class="card">
+        <h2>Service</h2>
+        <div class="pay-strip">
+          <div><div class="k">Completed</div><div class="v">${d.performance.completed}</div></div>
+          <div><div class="k">Issues</div><div class="v">${d.performance.issues}</div></div>
+          <div><div class="k">Photos</div><div class="v">${d.performance.photos}</div></div>
+        </div>
+        <div class="table-wrap" style="margin-top:10px"><table>${table(['Date','Unit','Result','Photo'],
+          d.recentPickups.slice(0, 10).map(r => `<tr>
+            <td class="small">${fmtDate(r.service_date)}</td>
+            <td class="small">${esc(r.community_name || '')} ${esc(r.unit_label)}</td>
+            <td>${r.status === 'completed' ? '<span class="pill ok">done</span>'
+                 : `<span class="pill bad">${esc(ISSUE_LABELS[r.issue_code] || 'issue')}</span>`}</td>
+            <td>${r.photo_id ? `<a href="/api/photos/${r.photo_id}" target="_blank" rel="noopener">View</a>` : '—'}</td>
+          </tr>`).join(''))}</table></div>
+      </div>
+
+      <div class="card">
+        <h2>Account</h2>
+        <table>
+          <tr><th>Login email</th><td>${esc(e.email)}</td></tr>
+          <tr><th>Role</th><td>employee</td></tr>
+          <tr><th>Account status</th><td>${statusPill(e.account_status)}</td></tr>
+          <tr><th>Last login</th><td>${e.last_login_at ? fmtDate(e.last_login_at) + ' ' + fmtTime(e.last_login_at) : 'never'}</td></tr>
+          <tr><th>Password changed</th><td>${e.password_changed_at ? fmtDate(e.password_changed_at) : 'unknown'}</td></tr>
+        </table>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" data-pw="temp" data-user="${e.user_id}">Generate temporary password</button>
+          <button class="btn" data-pw="force" data-user="${e.user_id}">Require change at next login</button>
+          ${e.locked_until && new Date(e.locked_until) > new Date()
+            ? `<button class="btn" data-pw="unlock" data-user="${e.user_id}">Unlock account</button>`
+            : `<button class="btn btn-danger" data-pw="lock" data-user="${e.user_id}">Lock account</button>`}
+        </div>
+        <p class="msg" id="pwMsg" hidden></p>
+        <p class="muted small">Existing passwords can never be viewed — only replaced.</p>
+      </div>
+
+      <div class="card">
+        <h2>Admin notes</h2>
+        <div class="field"><textarea id="empNote" rows="2" placeholder="Private note about this employee"></textarea></div>
+        <button class="btn" id="addEmpNote">Add note</button>
+        <div style="margin-top:12px">${d.notes.map(n => `
+          <p class="small" style="border-bottom:1px solid var(--line);padding-bottom:7px">
+            ${esc(n.body)}<br /><span class="muted">${esc(n.first_name || '')} ${esc(n.last_name || '')} · ${fmtDate(n.created_at)}</span>
+          </p>`).join('') || '<p class="muted small">No notes.</p>'}</div>
+      </div>
+    </div>
+
+    <div class="card" id="editEmpCard" hidden>
+      <h2>Edit employee</h2>
+      <div class="row">
+        <div><label>First name</label><input id="edFirst" value="${esc(e.first_name)}" /></div>
+        <div><label>Last name</label><input id="edLast" value="${esc(e.last_name)}" /></div>
+        <div><label>Login email</label><input id="edEmail" type="email" value="${esc(e.email)}" /></div>
+        <div><label>Phone</label><input id="edPhone" value="${esc(e.phone || '')}" /></div>
+      </div>
+      <div class="row">
+        <div><label>Address</label><input id="edAddress" value="${esc(p.address || '')}" /></div>
+        <div><label>City</label><input id="edCity" value="${esc(p.city || '')}" /></div>
+        <div><label>State</label><input id="edState" value="${esc(p.state || '')}" /></div>
+        <div><label>ZIP</label><input id="edZip" value="${esc(p.zip || '')}" /></div>
+      </div>
+      <div class="row">
+        <div><label>Emergency contact</label><input id="edEcName" value="${esc(p.emergency_contact_name || '')}" /></div>
+        <div><label>Emergency phone</label><input id="edEcPhone" value="${esc(p.emergency_contact_phone || '')}" /></div>
+        <div><label>Job title</label><input id="edTitle" value="${esc(p.job_title || '')}" /></div>
+        <div><label>Employee code</label><input id="edCode" value="${esc(e.employee_code || '')}" /></div>
+      </div>
+      <div class="row">
+        <div><label>Employment status</label>
+          <select id="edStatus">${['active','inactive','on_leave','terminated','archived']
+            .map(v => `<option value="${v}" ${v === e.status ? 'selected' : ''}>${v.replace('_',' ')}</option>`).join('')}</select></div>
+        <div><label>Vehicle</label><input id="edVehicle" value="${esc(p.vehicle_assignment || '')}" /></div>
+        <div><label>Uniform size</label><input id="edUniform" value="${esc(p.uniform_size || '')}" /></div>
+        <div><label>Background check</label>
+          <select id="edBg">${['', 'not_started','pending','cleared','flagged']
+            .map(v => `<option value="${v}" ${v === p.background_check_status ? 'selected' : ''}>${v || '—'}</option>`).join('')}</select></div>
+      </div>
+      <div class="row">
+        <div><label>Pay type</label><select id="edPayType">
+          <option value="hourly" ${pay.current.pay_type === 'hourly' ? 'selected' : ''}>Hourly</option>
+          <option value="daily" ${pay.current.pay_type === 'daily' ? 'selected' : ''}>Daily / shift</option></select></div>
+        <div><label>Pay rate</label><input id="edPayRate" type="number" step="0.01" value="${(pay.current.rate_cents / 100).toFixed(2)}" /></div>
+        <div><label>Rate effective from</label><input id="edPayDate" type="date" /></div>
+      </div>
+      <p class="msg" id="edMsg" hidden></p>
+      <button class="btn btn-primary" id="edSave">Save changes</button>
+      <button class="btn" id="edCancel">Cancel</button>
+    </div>`;
+
+  $('#backToEmps').addEventListener('click', loadEmployees);
+  $('#editEmpBtn').addEventListener('click', () => {
+    const c = $('#editEmpCard'); c.hidden = !c.hidden;
+    if (!c.hidden) c.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+  $('#edCancel').addEventListener('click', () => { $('#editEmpCard').hidden = true; });
+
+  $('#edSave').addEventListener('click', async () => {
+    const msg = $('#edMsg');
+    try {
+      await api(`/api/people/employees/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          firstName: $('#edFirst').value, lastName: $('#edLast').value,
+          email: $('#edEmail').value, phone: $('#edPhone').value,
+          address: $('#edAddress').value, city: $('#edCity').value,
+          state: $('#edState').value, zip: $('#edZip').value,
+          emergencyContactName: $('#edEcName').value, emergencyContactPhone: $('#edEcPhone').value,
+          jobTitle: $('#edTitle').value, employeeCode: $('#edCode').value,
+          status: $('#edStatus').value, vehicleAssignment: $('#edVehicle').value,
+          uniformSize: $('#edUniform').value,
+          backgroundCheckStatus: $('#edBg').value || undefined,
+        }),
+      });
+      // Pay is its own record so history is preserved; only write if it changed.
+      const newRate = Number($('#edPayRate').value);
+      if (newRate && (Math.round(newRate * 100) !== pay.current.rate_cents
+                      || $('#edPayType').value !== pay.current.pay_type)) {
+        await api(`/api/finance/employees/${id}/compensation`, {
+          method: 'POST',
+          body: JSON.stringify({ payType: $('#edPayType').value, rate: newRate,
+                                 effectiveDate: $('#edPayDate').value || undefined }),
+        });
+      }
+      msg.textContent = 'Saved. Changes are recorded in the audit trail.';
+      msg.className = 'msg ok'; msg.hidden = false;
+      setTimeout(() => showEmployee(id), 700);
+    } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
+  });
+
+  $$('[data-pw]').forEach(b => b.addEventListener('click', async () => {
+    const msg = $('#pwMsg'); const user = b.dataset.user;
+    const routes = { temp: 'temporary-password', force: 'force-password-change', lock: 'lock', unlock: 'unlock' };
+    const confirms = {
+      temp: 'Generate a temporary password? The current one stops working immediately.',
+      force: 'Require this employee to choose a new password at next sign-in?',
+      lock: 'Lock this account? They will be signed out and unable to sign in.',
+      unlock: 'Unlock this account?',
+    };
+    if (!confirm(confirms[b.dataset.pw])) return;
+    try {
+      const r = await api(`/api/people/accounts/${user}/${routes[b.dataset.pw]}`,
+                          { method: 'POST', body: JSON.stringify({}) });
+      msg.innerHTML = r.temporaryPassword
+        ? `Temporary password: <code style="font-size:1.05rem">${esc(r.temporaryPassword)}</code><br />
+           <span class="small">${esc(r.message)}</span>`
+        : 'Done.';
+      msg.className = 'msg ok'; msg.hidden = false;
+      if (!r.temporaryPassword) setTimeout(() => showEmployee(id), 900);
+    } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
+  }));
+
+  $('#addEmpNote').addEventListener('click', async () => {
+    const body = $('#empNote').value.trim();
+    if (!body) return;
+    await api(`/api/people/employees/${id}/notes`, { method: 'POST', body: JSON.stringify({ body }) });
+    showEmployee(id);
+  });
+}
+
+/* new employee form */
+$('#newEmpBtn').addEventListener('click', () => {
+  const c = $('#newEmpCard'); c.hidden = !c.hidden;
+  if (!c.hidden) $('#neHire').value = new Date().toISOString().slice(0, 10);
+});
+$('#neCancel').addEventListener('click', () => { $('#newEmpCard').hidden = true; });
+$('#neSave').addEventListener('click', async () => {
+  const msg = $('#neMsg');
+  try {
+    const r = await api('/api/people/employees', {
+      method: 'POST',
+      body: JSON.stringify({
+        firstName: $('#neFirst').value, lastName: $('#neLast').value,
+        email: $('#neEmail').value, phone: $('#nePhone').value,
+        employeeCode: $('#neCode').value || undefined, hireDate: $('#neHire').value || undefined,
+        payType: $('#nePayType').value, payRate: $('#nePayRate').value || undefined,
+        address: $('#neAddress').value, zip: $('#neZip').value,
+        emergencyContactName: $('#neEcName').value, emergencyContactPhone: $('#neEcPhone').value,
+      }),
+    });
+    msg.innerHTML = r.temporaryPassword
+      ? `Employee created. Temporary password: <code style="font-size:1.05rem">${esc(r.temporaryPassword)}</code>
+         <br /><span class="small">Shown once. They must change it at first sign-in.</span>`
+      : 'Employee created.';
+    msg.className = 'msg ok'; msg.hidden = false;
+    ['neFirst','neLast','neEmail','nePhone','neCode','nePayRate','neAddress','neZip','neEcName','neEcPhone']
+      .forEach(i => { $('#' + i).value = ''; });
+    loadEmployees();
+  } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
+});
+
+let empSearchTimer;
+$('#empSearch').addEventListener('input', () => {
+  clearTimeout(empSearchTimer); empSearchTimer = setTimeout(loadEmployees, 250);
+});
+$('#empStatusFilter').addEventListener('change', loadEmployees);
+
+/* ---------- accounts ---------- */
+async function loadAccounts() {
+  const params = new URLSearchParams();
+  if ($('#acctSearch').value) params.set('q', $('#acctSearch').value);
+  if ($('#acctRole').value) params.set('role', $('#acctRole').value);
+  if ($('#acctStatus').value) params.set('status', $('#acctStatus').value);
+
+  const rows = await api('/api/people/accounts?' + params);
+  $('#acctTable').innerHTML = table(
+    ['Name', 'Email', 'Role', 'Status', 'Last login', 'Actions'],
+    rows.map(u => `<tr>
+      <td><strong>${esc(u.first_name)} ${esc(u.last_name)}</strong></td>
+      <td class="small">${esc(u.email)}</td>
+      <td>${statusPill(u.role)}</td>
+      <td>${statusPill(u.status)}
+        ${u.isLocked ? '<span class="pill bad">locked</span>' : ''}
+        ${u.must_change_password ? '<span class="pill warn">pw change</span>' : ''}</td>
+      <td class="small muted">${u.last_login_at ? fmtDate(u.last_login_at) : 'never'}</td>
+      <td>
+        <button class="btn small" data-acct-pw="${u.id}">Temp password</button>
+        <button class="btn small" data-acct-toggle="${u.id}" data-status="${esc(u.status)}">
+          ${u.status === 'active' ? 'Deactivate' : 'Reactivate'}</button>
+        <button class="btn small" data-acct-lock="${u.id}" data-locked="${u.isLocked}">
+          ${u.isLocked ? 'Unlock' : 'Lock'}</button>
+        <button class="btn small" data-acct-role="${u.id}" data-role="${esc(u.role)}">Role</button>
+      </td>
+    </tr>`).join(''));
+
+  const msg = $('#acctMsg');
+  const act = async (fn) => {
+    try { await fn(); loadAccounts(); }
+    catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
+  };
+
+  $$('#acctTable [data-acct-pw]').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('Generate a temporary password? The current one stops working immediately.')) return;
+    act(async () => {
+      const r = await api(`/api/people/accounts/${b.dataset.acctPw}/temporary-password`,
+                          { method: 'POST', body: JSON.stringify({}) });
+      msg.innerHTML = `Temporary password: <code style="font-size:1.05rem">${esc(r.temporaryPassword)}</code>
+                       <br /><span class="small">${esc(r.message)}</span>`;
+      msg.className = 'msg ok'; msg.hidden = false;
+    });
+  }));
+
+  $$('#acctTable [data-acct-toggle]').forEach(b => b.addEventListener('click', () => act(() =>
+    api(`/api/people/accounts/${b.dataset.acctToggle}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: b.dataset.status === 'active' ? 'deactivated' : 'active' }),
+    }))));
+
+  $$('#acctTable [data-acct-lock]').forEach(b => b.addEventListener('click', () => act(() =>
+    api(`/api/people/accounts/${b.dataset.acctLock}/${b.dataset.locked === 'true' ? 'unlock' : 'lock'}`,
+        { method: 'POST', body: JSON.stringify({}) }))));
+
+  $$('#acctTable [data-acct-role]').forEach(b => b.addEventListener('click', () => {
+    const next = prompt(`Change role from "${b.dataset.role}" to (admin / employee / customer):`, b.dataset.role);
+    if (!next || next === b.dataset.role) return;
+    if (prompt('This changes what this person can see. Type CHANGE ROLE to confirm:') !== 'CHANGE ROLE') return;
+    act(() => api(`/api/people/accounts/${b.dataset.acctRole}`, {
+      method: 'PATCH', body: JSON.stringify({ role: next, confirm: 'CHANGE ROLE' }),
+    }));
+  }));
+}
+
+let acctTimer;
+$('#acctSearch').addEventListener('input', () => { clearTimeout(acctTimer); acctTimer = setTimeout(loadAccounts, 250); });
+$('#acctRole').addEventListener('change', loadAccounts);
+$('#acctStatus').addEventListener('change', loadAccounts);
 
 /* ---------- pickups ---------- */
 async function loadPickups() {
@@ -225,7 +731,7 @@ async function loadReports() {
 /* ---------- wiring ---------- */
 const loaders = {
   dashboard: loadOverview, customers: loadCustomers, communities: loadCommunities,
-  routes: loadRoutes, employees: loadEmployees, pickups: loadPickups,
+  routes: loadRoutes, employees: loadEmployees, accounts: loadAccounts, pickups: loadPickups,
   payments: loadPayments, reports: loadReports,
 };
 wireTabs((name) => loaders[name]?.());
@@ -482,3 +988,203 @@ $('#compSave').addEventListener('click', async () => {
 Object.assign(loaders, {
   financials: loadFinancials, expenses: loadExpenses, payroll: loadPayroll,
 });
+
+/* ============================================================
+   Coupons & promotions (marketing)
+   ============================================================ */
+let couponRange = '90d';
+const COUPON_STATUS_PILL = {
+  active: 'ok', scheduled: 'pending', expired: '', limit_reached: 'warn', disabled: 'bad',
+};
+
+$$('[data-coupon-range] button').forEach(b => b.addEventListener('click', () => {
+  couponRange = b.dataset.range;
+  $$('[data-coupon-range] button').forEach(x => x.setAttribute('aria-selected', String(x === b)));
+  loadCoupons();
+}));
+
+function discountLabel(c) {
+  switch (c.discount_type) {
+    case 'fixed':       return `${money(c.discount_value / 100)} off`;
+    case 'percent':     return `${c.discount_value}% off`;
+    case 'promo_price': return `${money(c.discount_value / 100)} price`;
+    case 'free_period': return `${c.discount_value} free period(s)`;
+    default: return '—';
+  }
+}
+
+async function loadCoupons() {
+  const [coupons, analytics] = await Promise.all([
+    api('/api/promo/coupons'),
+    api(`/api/promo/coupon-analytics?range=${couponRange}`),
+  ]);
+
+  $('#couponTable').innerHTML = table(
+    ['Code', 'Name', 'Discount', 'Window', 'Used', 'Remaining', 'New', 'Existing', 'Revenue', 'Given', 'Status', ''],
+    coupons.map(c => `<tr>
+      <td><strong>${esc(c.code)}</strong>${c.is_intro ? ' <span class="pill intro">launch</span>' : ''}</td>
+      <td class="small">${esc(c.name)}</td>
+      <td class="small">${esc(discountLabel(c))}</td>
+      <td class="small muted">${c.starts_at ? fmtDate(c.starts_at) : 'any'} → ${c.ends_at ? fmtDate(c.ends_at) : 'open'}</td>
+      <td class="num">${c.used}${c.max_redemptions ? ' / ' + c.max_redemptions : ''}</td>
+      <td class="num">${c.remaining == null ? '∞' : c.remaining}</td>
+      <td class="num">${c.newCustomers}</td>
+      <td class="num">${c.existingCustomers}</td>
+      <td class="num">${money(c.revenue)}</td>
+      <td class="num">${money(c.discountGiven)}</td>
+      <td><span class="pill ${COUPON_STATUS_PILL[c.status] ?? ''}">${esc(c.status.replace('_', ' '))}</span></td>
+      <td>
+        <button class="btn small" data-coupon-hist="${c.id}" data-code="${esc(c.code)}">History</button>
+        <button class="btn small" data-coupon-toggle="${c.id}" data-disabled="${c.disabled}">
+          ${c.disabled ? 'Enable' : 'Disable'}</button>
+      </td>
+    </tr>`).join(''));
+
+  $$('#couponTable [data-coupon-hist]').forEach(b => b.addEventListener('click', async () => {
+    const rows = await api(`/api/promo/coupons/${b.dataset.couponHist}/redemptions`);
+    $('#redemptionCard').hidden = false;
+    $('#redemptionTitle').textContent = `Redemption history — ${b.dataset.code}`;
+    $('#redemptionTable').innerHTML = table(
+      ['Customer', 'Plan', 'Original', 'Discount', 'Final', 'Type', 'Redeemed'],
+      rows.map(r => `<tr>
+        <td><strong>${esc(r.first_name)} ${esc(r.last_name)}</strong><br />
+          <span class="small muted">${esc(r.email)}</span></td>
+        <td class="small">${esc(r.plan_code || '—')}</td>
+        <td class="num">${money(r.originalPrice)}</td>
+        <td class="num">${money(r.discount)}</td>
+        <td class="num"><strong>${money(r.finalPrice)}</strong></td>
+        <td><span class="pill ${r.customer_type === 'new' ? 'ok' : ''}">${esc(r.customer_type)}</span></td>
+        <td class="small muted">${fmtDate(r.redeemed_at)}</td>
+      </tr>`).join(''));
+    $('#redemptionCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }));
+
+  $$('#couponTable [data-coupon-toggle]').forEach(b => b.addEventListener('click', async () => {
+    await api(`/api/promo/coupons/${b.dataset.couponToggle}`, {
+      method: 'PATCH', body: JSON.stringify({ disabled: b.dataset.disabled !== '1' }),
+    });
+    loadCoupons();
+  }));
+
+  lineChart($('#chartCouponRedemptions'), {
+    title: 'Redemptions over time',
+    data: analytics.redemptionsOverTime,
+    series: [
+      { key: 'new_customers', color: '#2a78d6', label: 'New' },
+      { key: 'existing_customers', color: '#f1541f', label: 'Existing' },
+    ],
+  });
+  barChart($('#chartNewVsExisting'), { title: 'New vs existing customers', data: analytics.newVsExisting, unit: 'count' });
+  barChart($('#chartRevByCoupon'),   { title: 'Revenue by coupon', data: analytics.revenueByCoupon });
+  barChart($('#chartDiscByCoupon'),  { title: 'Discount cost by coupon', data: analytics.discountByCoupon, color: '#f1541f' });
+}
+
+$('#newCouponBtn').addEventListener('click', () => {
+  const f = $('#newCouponForm'); f.hidden = !f.hidden;
+});
+$('#ncCancel').addEventListener('click', () => { $('#newCouponForm').hidden = true; });
+$('#ncSave').addEventListener('click', async () => {
+  const msg = $('#ncMsg');
+  try {
+    await api('/api/promo/coupons', {
+      method: 'POST',
+      body: JSON.stringify({
+        code: $('#ncCode').value, name: $('#ncName').value,
+        description: $('#ncDesc').value || undefined,
+        discountType: $('#ncType').value, discountValue: $('#ncValue').value,
+        startsAt: $('#ncStart').value || undefined, endsAt: $('#ncEnd').value || undefined,
+        maxRedemptions: $('#ncMax').value || undefined,
+        perCustomerLimit: $('#ncPerCustomer').value,
+        eligibleCustomerType: $('#ncEligible').value,
+        allowStacking: $('#ncStack').value === '1',
+      }),
+    });
+    msg.textContent = 'Coupon created.'; msg.className = 'msg ok'; msg.hidden = false;
+    ['ncCode','ncName','ncValue','ncDesc','ncMax'].forEach(i => { $('#' + i).value = ''; });
+    loadCoupons();
+  } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
+});
+
+/* ============================================================
+   Service credits (service recovery)
+   ============================================================ */
+async function loadCredits() {
+  const [report, pending, activity, all_] = await Promise.all([
+    api(`/api/promo/credit-report?range=${couponRange}`),
+    api('/api/promo/credits?status=pending'),
+    api('/api/promo/credit-activity'),
+    api('/api/promo/credits'),
+  ]);
+
+  $('#creditStats').innerHTML = [
+    ['Granted', money(report.totals.granted), ''],
+    ['Credits issued', report.totals.grantedCount, ''],
+    ['Pending approval', money(report.totals.pending), report.totals.pendingCount ? 'bad' : ''],
+    ['Awaiting decision', report.totals.pendingCount, report.totals.pendingCount ? 'bad' : ''],
+  ].map(([l, v, c]) =>
+    `<div class="stat ${c}"><div class="stat-label">${l}</div><div class="stat-value">${esc(v)}</div></div>`).join('');
+
+  $('#pendingTable').innerHTML = table(
+    ['Requested', 'Customer', 'By', 'Amount', 'Reason', 'Notes', 'Decision'],
+    pending.map(c => `<tr>
+      <td class="small">${fmtDate(c.requested_at)}</td>
+      <td><strong>${esc(c.customer_first)} ${esc(c.customer_last)}</strong></td>
+      <td class="small">${esc(c.emp_first || '—')} ${esc(c.emp_last || '')}</td>
+      <td class="num"><strong>${money(c.requested)}</strong></td>
+      <td class="small">${esc(c.reasonLabel)}</td>
+      <td class="small muted">${esc(c.notes || '')}</td>
+      <td>
+        <button class="btn small btn-primary" data-decide="approve" data-id="${c.id}">Approve</button>
+        <button class="btn small" data-decide="modify" data-id="${c.id}" data-max="${c.requested}">Modify</button>
+        <button class="btn small btn-danger" data-decide="reject" data-id="${c.id}">Reject</button>
+      </td>
+    </tr>`).join(''));
+
+  $$('#pendingTable [data-decide]').forEach(b => b.addEventListener('click', async () => {
+    const msg = $('#creditMsg');
+    const decision = b.dataset.decide;
+    let approvedAmount;
+    if (decision === 'modify') {
+      approvedAmount = prompt(`Approve how much? (requested $${b.dataset.max})`, b.dataset.max);
+      if (!approvedAmount) return;
+    }
+    const notes = prompt('Decision notes (optional):') || undefined;
+    try {
+      await api(`/api/promo/credits/${b.dataset.id}/decide`, {
+        method: 'POST', body: JSON.stringify({ decision, approvedAmount, notes }),
+      });
+      msg.textContent = 'Decision recorded in the audit trail.';
+      msg.className = 'msg ok'; msg.hidden = false;
+      loadCredits();
+    } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
+  }));
+
+  barChart($('#chartCreditReason'),    { title: 'Credits by reason', data: report.byReason, color: '#f1541f' });
+  barChart($('#chartCreditEmployee'),  { title: 'Credits by employee', data: report.byEmployee, color: '#f1541f' });
+  barChart($('#chartCreditCommunity'), { title: 'Credits by community', data: report.byCommunity, color: '#f1541f' });
+
+  $('#creditActivityTable').innerHTML = table(
+    ['Employee', 'Issued', 'Total', 'Average', 'Pending'],
+    activity.map(a => `<tr>
+      <td>${esc(a.name)}</td>
+      <td class="num">${a.issuedThisMonth}</td>
+      <td class="num">${money(a.totalThisMonth)}</td>
+      <td class="num">${money(a.averageCredit)}</td>
+      <td class="num">${a.pending}</td>
+    </tr>`).join(''));
+
+  $('#allCreditsTable').innerHTML = table(
+    ['Date', 'Customer', 'By', 'Requested', 'Approved', 'Reason', 'Status', 'Approved by'],
+    all_.slice(0, 60).map(c => `<tr>
+      <td class="small">${fmtDate(c.requested_at)}</td>
+      <td class="small">${esc(c.customer_first)} ${esc(c.customer_last)}</td>
+      <td class="small">${esc(c.emp_first || 'Manager')} ${esc(c.emp_last || '')}</td>
+      <td class="num">${money(c.requested)}</td>
+      <td class="num">${c.approved != null ? money(c.approved) : '—'}</td>
+      <td class="small">${esc(c.reasonLabel)}</td>
+      <td>${statusPill(c.status)}</td>
+      <td class="small muted">${esc(c.approver_first || '')} ${esc(c.approver_last || '')}</td>
+    </tr>`).join(''));
+}
+
+Object.assign(loaders, { coupons: loadCoupons, credits: loadCredits });

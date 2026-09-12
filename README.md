@@ -241,8 +241,32 @@ Spot consumed  ←  only here, in submitSignup()
 ```
 
 The remaining count renders as _"73 introductory spots remaining."_ in both the
-coupon and the pricing section. When it reaches zero, the offer block and the
-introductory plan option hide themselves automatically.
+coupon and the pricing section, read live from `GET /api/intro-spots`. When it
+reaches zero, the offer block and the introductory plan option hide themselves
+automatically.
+
+### Why the popup stops appearing
+
+Once a visitor dismisses the coupon, it stays hidden for `intro.remindAfterDays`
+(7 by default) — a flag in that browser's `localStorage`. That is deliberate:
+a promo that reappears on every page load is the thing people close without
+reading.
+
+While building or demoing, force it back:
+
+| URL | Effect |
+|---|---|
+| `http://localhost:3000/?offer=1` | Show the offer even if dismissed |
+| `http://localhost:3000/?offer=0` | Suppress it |
+
+Or clear the flag from the browser console:
+
+```js
+localStorage.removeItem('dtp_promo_dismissed'); location.reload();
+```
+
+An incognito window works too — `localStorage` is per browser profile, which is
+also why it can appear on one machine and not another.
 
 ---
 
@@ -590,6 +614,247 @@ the role**, so the menu is convenience, not security. An employee who types
 |---|---|---|---|---|
 | `/api/finance/*` (9 routes) | 200 | **404** | **404** | 401 |
 | `/api/employee/shift` | — | 200 | 404 | 401 |
+
+## Employee management and accounts
+
+The **Employees** tab lists staff with search and status filters; opening one
+gives a full profile page: Profile · Pay (with rate history) · Time · Routes ·
+Service · Account · Notes. **Edit employee** changes any of it in place — no
+delete-and-recreate.
+
+The **Accounts** tab is the central view of every user (admin, employee,
+customer) with role, status, and locked filters.
+
+### Employment status
+
+`active` · `inactive` · `on_leave` · `terminated` · `archived`
+
+Leaving `active` also deactivates the login and destroys live sessions — a
+terminated employee cannot keep working from an open tab. **Nobody is ever
+deleted**: the row stays so time entries, pickup records, and payroll history
+remain accurate. Verified: a terminated employee is refused at login while their
+pay history and shifts stay intact.
+
+### Passwords
+
+An admin can never see an existing password — only replace it.
+
+| Action | Effect |
+|---|---|
+| Generate temporary password | Shown **once**, current password stops working, all sessions killed |
+| Require change at next login | Sets the flag without changing the password |
+| Lock account | Refused at login, sessions destroyed |
+| Unlock account | Restores sign-in |
+
+A temporary password is genuinely inert: login succeeds but returns
+`mustChangePassword`, every API route answers **403 PASSWORD_CHANGE_REQUIRED**,
+and the dashboard **302-redirects** to the change page. Only after choosing a new
+password does anything else work.
+
+Every password action is written to `password_reset_events` — the fact of a
+reset, its actor, and its time, never the password itself.
+
+### Pay rate history
+
+Changing a rate never rewrites past payroll. Setting a new rate ends the previous
+one the day before:
+
+```
+$18.00 hourly   2026-06-14 → 2026-09-11
+$20.00 hourly   2026-09-12 → present
+```
+
+Verified by raising Marcus from $18 to $20: his September payroll still computed
+at **$17.98/hr effective** because each time entry carries the rate snapshot
+taken at clock-in. New shifts use $20.
+
+### Audit trail
+
+Consequential changes record **old → new**, not just that something happened:
+
+```
+account.role_changed   Jey   role: employee -> admin
+employee.updated       Jey   status: active -> terminated
+timeclock.corrected    Jey   before/after clock times + reason
+```
+
+Role changes require typing `CHANGE ROLE` to confirm, and an admin cannot change
+their own role or lock their own account.
+
+### Security
+
+| Endpoint | admin | employee | customer | signed out |
+|---|---|---|---|---|
+| `/api/people/*` | 200 | **404** | **404** | 401 |
+| Issue temp password | 200 | **404** | **404** | 401 |
+| Promote self to admin | — | **404** | **404** | 401 |
+
+The employee detail response was checked for credential leakage: **no
+`password_hash` appears anywhere in it.**
+
+## Coupons and service credits
+
+Two different things, kept apart in the schema, the routes, and the reports:
+
+| | Coupon | Service credit |
+|---|---|---|
+| Purpose | Acquire or retain a customer | Apologise for our mistake |
+| Who issues | Admin / Manager | Employee (to $5), Manager above |
+| Reported as | Marketing discount | Operational cost |
+| Table | `coupons`, `coupon_redemptions` | `service_credits` |
+
+### Coupons
+
+Types: **fixed** dollar off · **percent** off · **promo_price** (a set price) ·
+**free_period**. Each has a window, a redemption cap, a per-customer limit
+(once / multiple / once per cycle), plan eligibility, and new-vs-existing
+targeting. Stacking is off unless **both** coupons allow it.
+
+Status is **derived, never stored**, so it cannot go stale:
+`scheduled` · `active` · `expired` · `limit_reached` · `disabled`.
+
+**Checking a code reserves nothing.** A redemption row is written only after
+payment succeeds. Verified: five validations of `DASHLAUNCH` left the count at
+9/100. Under 20 simultaneous redemptions against 3 remaining spots, **exactly 3
+were granted** — the cap is re-checked inside the transaction.
+
+New vs existing is decided at redemption time and frozen, because a customer who
+is new today would otherwise look existing when the report runs next year.
+
+The first-100 launch offer is now a real coupon (`DASHLAUNCH`). The public site
+reads `/api/intro-spots` from it — **the hardcoded frontend counter is gone.**
+
+### Service credits — the $5 rule
+
+An employee may issue up to the configured limit on their own. Above it, the
+credit becomes a request that does nothing until a manager approves it.
+
+| Amount | Result |
+|---|---|
+| $5.00 | applied immediately (`auto_approved`) |
+| $6.00 | `pending` — sent for approval |
+| **$500 from a tampered client** | **still only `pending`** |
+
+The threshold is checked on the server, so editing the request body changes
+nothing. Monthly caps also apply — per employee and per customer — so repeated
+$5 credits cannot add up unchecked. Reason `other` requires notes.
+
+A manager can **approve**, **modify** (never above the requested amount), or
+**reject**. Deciding twice is refused. Every decision records requested vs
+approved amount, both parties, and the reason.
+
+### Manager role
+
+Permissions are **configurable rows**, not code, so a Manager never silently
+inherits Admin:
+
+| | Manager | Admin |
+|---|---|---|
+| Credit approvals, coupons, reports, routes, customers | ✅ | ✅ |
+| **Financials, payroll, account administration** | ❌ | ✅ |
+
+Verified: manager gets 200 on operations endpoints and **404** on
+`/api/finance/*` and `/api/people/accounts`.
+
+### Financial separation
+
+```
+gross revenue      $3,146.40
+coupon discounts  -$  240.40
+service credits   -$   68.00
+refunds           -$    0.00
+net collected      $2,838.00     discount rate 9.8% of gross
+```
+
+Coupon discounts are already absent from collected revenue (the customer was
+charged the discounted price), so they are **not** subtracted again in profit —
+that would double-count. Service credits **are** subtracted, because they are
+money handed back after the fact.
+
+### What the customer sees
+
+Credits appear on their billing page as a line item with a balance. They never
+see internal notes, who requested it, or any approval discussion.
+
+## Community lifecycle and service verification
+
+### A property exists before we service it
+
+```
+lead → waiting_list / driver_needed → pending_setup → scheduled → active
+```
+
+**Creating a community never starts service.** Activation is a separate,
+deliberate endpoint that first checks four things:
+
+| Check | |
+|---|---|
+| Pickup days configured | schedule rows exist |
+| On at least one route | a route stop references it |
+| A driver is assigned | that route has a current assignment |
+| Units exist | there is something to service |
+
+Verified: a plain `PATCH {status:'active'}` is **refused** and redirected to the
+activate endpoint; activation with failing checks returns **409** listing exactly
+what is missing (`force: true` overrides deliberately). On activation the actual
+start date is recorded, status history is written, and everyone on the waiting
+list is marked notified.
+
+A **tentative start date** is exactly that — it is labelled tentative and
+activates nothing.
+
+### Waiting list
+
+`/api/waitlist` is public. Joining creates **no customer, no subscription, and
+no charge** — verified: the launch coupon stayed at 9/100 after a waiting-list
+signup. Duplicates are refused, and signing up for an already-active community
+redirects to normal signup.
+
+Promotional handling on the waiting list is **configurable**, not assumed:
+
+| `promo.reserve_on_waitlist` | Behaviour |
+|---|---|
+| `0` (default) | The rate applies when service begins, subject to availability |
+| `1` | A promotional spot is held at signup |
+
+Both were tested by flipping the setting.
+
+### Photo verification
+
+A completed pickup is a claim that work was done, so it requires evidence.
+Verified: completing without a photo returns **400 `PHOTO_REQUIRED`**.
+
+Both requirements are settings, not constants:
+
+| Setting | Default |
+|---|---|
+| `pickup.require_photo` | `1` — required to complete |
+| `pickup.require_issue_photo` | `0` — optional on an issue report |
+
+### Every address individually
+
+The checklist is grouped by **building** with per-building progress
+(`Building 1 — 4/4`, `Building 2 — 0/4`) and an overall count. There is no way to
+mark a whole community done — each unit carries its own status, timestamp,
+employee, photo, and notes.
+
+### Issue reporting — 13 types
+
+No trash outside · Unable to access property · Trash improperly bagged ·
+Oversized item · Restricted item · Customer not home · Incorrect address ·
+Blocked access · Animal / safety issue · Property issue · Service problem ·
+Customer not found · Other.
+
+### Notes
+
+Employee notes are **internal by default**. A note reaches the customer only when
+explicitly flagged, which writes a separate customer-visible note.
+
+### Service credits from the pickup screen
+
+$0–$5 quick-tap chips plus a free amount field, with the reason list and the $5
+authority rule described under Coupons and service credits. A credit raised here
+is linked to the customer, employee, community, and route.
 
 ## Deploying
 

@@ -44,6 +44,9 @@ router.post('/login', async (req, res) => {
   if (user.status !== 'active') {
     return res.status(403).json({ error: 'This account is not active. Contact your administrator.' });
   }
+  if (user.locked_until && new Date(user.locked_until) > new Date()) {
+    return res.status(403).json({ error: 'This account is locked. Contact your administrator.' });
+  }
 
   attempts.delete(key);
   const { token } = createSession(user.id, { ip: req.ip, userAgent: req.headers['user-agent'] });
@@ -53,13 +56,18 @@ router.post('/login', async (req, res) => {
   req.user = user;
   audit(req, 'auth.login', { entityType: 'user', entityId: user.id });
 
+  const mustChange = Boolean(user.must_change_password);
+
   res.json({
     user: {
       id: user.id, email: user.email, role: user.role,
       firstName: user.first_name, lastName: user.last_name,
     },
+    mustChangePassword: mustChange,
     // Where the browser should go next. The server decides, not the client.
-    redirect: { admin: '/dashboard/admin/', employee: '/dashboard/employee/', customer: '/dashboard/customer/' }[user.role],
+    redirect: mustChange
+      ? '/dashboard/change-password.html'
+      : { admin: '/dashboard/admin/', manager: '/dashboard/admin/', employee: '/dashboard/employee/', customer: '/dashboard/customer/' }[user.role],
   });
 });
 
@@ -71,9 +79,11 @@ router.post('/logout', (req, res) => {
 });
 
 router.get('/me', requireAuth, (req, res) => {
+  const u = one('SELECT must_change_password FROM users WHERE id = ?', req.user.id);
   res.json({
     id: req.user.id, email: req.user.email, role: req.user.role,
     firstName: req.user.first_name, lastName: req.user.last_name, phone: req.user.phone,
+    mustChangePassword: Boolean(u?.must_change_password),
   });
 });
 
@@ -87,7 +97,11 @@ router.post('/change-password', requireAuth, async (req, res) => {
   const problem = passwordProblem(newPassword);
   if (problem) return res.status(400).json({ error: problem });
 
-  run('UPDATE users SET password_hash = ? WHERE id = ?', await hashPassword(newPassword), user.id);
+  run(`UPDATE users SET password_hash = ?, must_change_password = 0,
+                       password_changed_at = datetime('now') WHERE id = ?`,
+      await hashPassword(newPassword), user.id);
+  run(`INSERT INTO password_reset_events (user_id, actor_user_id, kind, used_at)
+       VALUES (?, ?, 'self_change', datetime('now'))`, user.id, user.id);
   destroyAllSessions(user.id);            // sign out everywhere after a change
   audit(req, 'auth.password_changed', { entityType: 'user', entityId: user.id });
   res.clearCookie(COOKIE_NAME, { path: '/' });

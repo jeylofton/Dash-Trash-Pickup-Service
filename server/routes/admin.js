@@ -46,8 +46,61 @@ router.get('/overview', (req, res) => {
       FROM subscriptions s JOIN plans p ON p.id = s.plan_id
      WHERE s.status = 'active'`).c;
 
+  /* Operations picture, not just today's numbers. */
+  const photosToday = one(
+    `SELECT COUNT(*) AS n FROM pickup_photos ph
+       JOIN pickup_records pr ON pr.id = ph.pickup_record_id
+      WHERE pr.service_date = ?`, date).n;
+
+  const credits = one(`
+    SELECT COALESCE(SUM(CASE WHEN status IN ('auto_approved','approved','modified','applied')
+                             THEN COALESCE(approved_cents, requested_cents) END),0) AS granted_cents,
+           COUNT(CASE WHEN status='pending' THEN 1 END) AS pending_count,
+           COALESCE(SUM(CASE WHEN status='pending' THEN requested_cents END),0) AS pending_cents
+      FROM service_credits
+     WHERE strftime('%Y-%m', requested_at) = strftime('%Y-%m','now')`);
+
+  const communities = one(`
+    SELECT COUNT(CASE WHEN status='active' THEN 1 END) AS active,
+           COUNT(CASE WHEN status IN ('waiting_list','lead') THEN 1 END) AS waiting,
+           COUNT(CASE WHEN status='driver_needed' THEN 1 END) AS driver_needed,
+           COUNT(CASE WHEN status='scheduled' THEN 1 END) AS scheduled
+      FROM communities`);
+
+  const upcoming = all(`
+    SELECT id, name, status, tentative_start_date, unit_count_estimate
+      FROM communities
+     WHERE status != 'active' AND tentative_start_date IS NOT NULL
+     ORDER BY tentative_start_date LIMIT 6`);
+
+  const introCoupon = one(`SELECT * FROM coupons WHERE is_intro = 1 AND disabled = 0
+                            ORDER BY id DESC LIMIT 1`);
+  const introUsed = introCoupon
+    ? one(`SELECT COUNT(*) AS n FROM coupon_redemptions
+            WHERE coupon_id = ? AND status='completed'`, introCoupon.id).n : 0;
+
   res.json({
     day,
+    photosToday,
+    serviceCredits: {
+      grantedThisMonth: money(credits.granted_cents),
+      pendingCount: credits.pending_count,
+      pendingAmount: money(credits.pending_cents),
+    },
+    communities: {
+      active: communities.active, waitingList: communities.waiting,
+      driverNeeded: communities.driver_needed, scheduled: communities.scheduled,
+    },
+    upcomingStarts: upcoming.map(c => ({
+      id: c.id, name: c.name, status: c.status,
+      tentativeStartDate: c.tentative_start_date, units: c.unit_count_estimate,
+    })),
+    promotion: introCoupon ? {
+      code: introCoupon.code, used: introUsed,
+      max: introCoupon.max_redemptions,
+      remaining: introCoupon.max_redemptions == null ? null
+        : Math.max(0, introCoupon.max_redemptions - introUsed),
+    } : null,
     customers: { active: activeCustomers, introActive },
     intro: { claimed: intro.claimed, total: intro.total, remaining: Math.max(intro.total - intro.claimed, 0) },
     employeesAssigned,

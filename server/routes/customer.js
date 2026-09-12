@@ -111,6 +111,31 @@ router.get('/plans', (req, res) => {
   res.json({ plans: available, currentPlanCode: current?.code ?? null });
 });
 
+/* Credits a customer can see. Deliberately excludes internal notes,
+   who requested it, and any approval discussion. */
+router.get('/credits', (req, res) => {
+  const rows = all(
+    `SELECT id, reason, COALESCE(approved_cents, requested_cents) AS cents, requested_at
+       FROM service_credits
+      WHERE customer_id = ? AND status IN ('auto_approved','approved','modified','applied')
+      ORDER BY requested_at DESC LIMIT 50`, req.customer.id);
+
+  const LABELS = {
+    missed_pickup: 'Missed pickup credit', late_pickup: 'Late pickup credit',
+    service_error: 'Service credit', damaged_property: 'Property credit',
+    customer_complaint: 'Service credit', billing_adjustment: 'Billing adjustment',
+    courtesy: 'Courtesy credit', other: 'Service credit',
+  };
+
+  res.json({
+    balance: money(rows.reduce((a, r) => a + r.cents, 0)),
+    credits: rows.map(r => ({
+      id: r.id, label: LABELS[r.reason] || 'Service credit',
+      amount: money(r.cents), date: r.requested_at,
+    })),
+  });
+});
+
 router.get('/payments', (req, res) => {
   res.json(all(`
     SELECT p.id, p.amount_cents, p.status, p.paid_at, p.failure_reason, p.created_at,

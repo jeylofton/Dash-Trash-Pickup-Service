@@ -26,11 +26,14 @@
     <button data-tab="communities">Communities</button>
     <button data-tab="routes">Routes</button>
     <button data-tab="employees">Employees</button>
+    <button data-tab="accounts">Accounts</button>
     <button data-tab="pickups">Pickups</button>
     <button data-tab="payments">Payments</button>
     <button data-tab="financials">Financials</button>
     <button data-tab="expenses">Expenses</button>
     <button data-tab="payroll">Payroll</button>
+    <button data-tab="coupons">Coupons</button>
+    <button data-tab="credits">Service Credits</button>
     <button data-tab="reports">Reports</button>
   </nav>
 
@@ -60,7 +63,56 @@
     </section>
 
     <section data-panel="communities" hidden>
-      <h1>Communities</h1>
+      <h1>Communities &amp; Locations</h1>
+      <p class="muted small" style="margin-top:-8px">A property can exist here long before we service it.
+        Adding one never starts service.</p>
+
+      <div class="card" id="driverBoard">
+        <h2>Needing drivers &amp; upcoming starts</h2>
+        <div class="table-wrap"><table id="driverTable"></table></div>
+      </div>
+
+      <div class="toolbar">
+        <div><label for="commStatusFilter">Status</label>
+          <select id="commStatusFilter"><option value="">All statuses</option>
+            <option>lead</option><option>waiting_list</option><option>driver_needed</option>
+            <option>pending_setup</option><option>scheduled</option><option>active</option>
+            <option>paused</option><option>inactive</option></select></div>
+        <div style="flex:0 0 auto"><button class="btn btn-primary" id="newCommBtn">+ Add community</button></div>
+      </div>
+
+      <div class="card" id="newCommCard" hidden>
+        <h2>New community</h2>
+        <div class="row">
+          <div><label>Name</label><input id="ncoName" placeholder="Riverbend Townhomes" /></div>
+          <div><label>Type</label><select id="ncoKind"><option value="apartment">Apartment</option>
+            <option value="townhome">Townhome</option><option value="neighborhood">Neighborhood</option>
+            <option value="other">Other</option></select></div>
+          <div><label>Street</label><input id="ncoStreet" /></div>
+          <div><label>ZIP</label><input id="ncoZip" /></div>
+        </div>
+        <div class="row">
+          <div><label>Property manager</label><input id="ncoContact" /></div>
+          <div><label>Manager phone</label><input id="ncoPhone" /></div>
+          <div><label>Manager email</label><input id="ncoEmail" type="email" /></div>
+        </div>
+        <div class="row">
+          <div><label>Status</label><select id="ncoStatus">
+            <option value="lead">Lead</option><option value="waiting_list">Waiting list</option>
+            <option value="driver_needed">Driver needed</option><option value="pending_setup">Pending setup</option>
+            <option value="scheduled">Scheduled to start</option></select></div>
+          <div><label>Units</label><input id="ncoUnits" type="number" /></div>
+          <div><label>Potential customers</label><input id="ncoPotential" type="number" /></div>
+          <div><label>Tentative start</label><input id="ncoTentative" type="date" /></div>
+        </div>
+        <div class="row">
+          <div><label>Reason / notes</label><input id="ncoReason" placeholder="Driver needed" /></div>
+        </div>
+        <p class="msg" id="ncoMsg" hidden></p>
+        <button class="btn btn-primary" id="ncoSave">Create community</button>
+        <button class="btn" id="ncoCancel">Cancel</button>
+      </div>
+
       <div class="card"><div class="table-wrap"><table id="commTable"></table></div></div>
       <div class="card" id="commDetail" hidden></div>
     </section>
@@ -72,8 +124,62 @@
     </section>
 
     <section data-panel="employees" hidden>
-      <h1>Employees</h1>
-      <div class="card"><div class="table-wrap"><table id="empTable"></table></div></div>
+      <div id="empListView">
+        <h1>Employees</h1>
+        <div class="toolbar">
+          <div style="flex:2 1 240px"><label for="empSearch">Search</label>
+            <input id="empSearch" placeholder="Name, email, or code" /></div>
+          <div><label for="empStatusFilter">Status</label>
+            <select id="empStatusFilter"><option value="">All</option><option>active</option>
+              <option>inactive</option><option>on_leave</option><option>terminated</option>
+              <option>archived</option></select></div>
+          <div style="flex:0 0 auto"><button class="btn btn-primary" id="newEmpBtn">+ Add employee</button></div>
+        </div>
+        <div class="card" id="newEmpCard" hidden>
+          <h2>New employee</h2>
+          <div class="row">
+            <div><label for="neFirst">First name</label><input id="neFirst" /></div>
+            <div><label for="neLast">Last name</label><input id="neLast" /></div>
+            <div><label for="neEmail">Email (login)</label><input id="neEmail" type="email" /></div>
+            <div><label for="nePhone">Phone</label><input id="nePhone" type="tel" /></div>
+          </div>
+          <div class="row">
+            <div><label for="neCode">Employee code</label><input id="neCode" placeholder="EMP-004" /></div>
+            <div><label for="neHire">Hire date</label><input id="neHire" type="date" /></div>
+            <div><label for="nePayType">Pay type</label>
+              <select id="nePayType"><option value="hourly">Hourly</option><option value="daily">Daily / shift</option></select></div>
+            <div><label for="nePayRate">Rate</label><input id="nePayRate" type="number" step="0.01" placeholder="18.00" /></div>
+          </div>
+          <div class="row">
+            <div><label for="neAddress">Address</label><input id="neAddress" /></div>
+            <div><label for="neZip">ZIP</label><input id="neZip" /></div>
+            <div><label for="neEcName">Emergency contact</label><input id="neEcName" /></div>
+            <div><label for="neEcPhone">Emergency phone</label><input id="neEcPhone" type="tel" /></div>
+          </div>
+          <p class="muted small">Leave the password blank and the system issues a temporary one the
+            employee must replace at first sign-in.</p>
+          <p class="msg" id="neMsg" hidden></p>
+          <button class="btn btn-primary" id="neSave">Create employee</button>
+          <button class="btn" id="neCancel">Cancel</button>
+        </div>
+        <div class="card"><div class="table-wrap"><table id="empTable"></table></div></div>
+      </div>
+
+      <div id="empDetailView" hidden></div>
+    </section>
+
+    <section data-panel="accounts" hidden>
+      <h1>Accounts</h1>
+      <div class="toolbar">
+        <div style="flex:2 1 240px"><label for="acctSearch">Search</label><input id="acctSearch" placeholder="Name or email" /></div>
+        <div><label for="acctRole">Role</label>
+          <select id="acctRole"><option value="">All roles</option><option>admin</option><option>employee</option><option>customer</option></select></div>
+        <div><label for="acctStatus">Status</label>
+          <select id="acctStatus"><option value="">All</option><option value="active">Active</option>
+            <option value="deactivated">Inactive</option><option value="locked">Locked</option></select></div>
+      </div>
+      <div class="card"><div class="table-wrap"><table id="acctTable"></table></div></div>
+      <p class="msg" id="acctMsg" hidden></p>
     </section>
 
     <section data-panel="pickups" hidden>
@@ -180,6 +286,93 @@
       <div class="card">
         <h2>Employee performance</h2>
         <div class="table-wrap"><table id="perfTable"></table></div>
+      </div>
+    </section>
+
+    <section data-panel="coupons" hidden>
+      <h1>Coupons &amp; Promotions</h1>
+      <p class="muted small" style="margin-top:-8px">Marketing discounts used to acquire or retain
+        customers. Service-recovery credits are tracked separately under Service Credits.</p>
+      <div class="range-bar" data-coupon-range>
+        <button data-range="30d">30 days</button>
+        <button data-range="90d" aria-selected="true">90 days</button>
+        <button data-range="ytd">Year to date</button>
+        <button data-range="12m">12 months</button>
+      </div>
+      <div class="card">
+        <button class="btn btn-primary" id="newCouponBtn">+ New coupon</button>
+        <div id="newCouponForm" hidden style="margin-top:14px">
+          <div class="row">
+            <div><label for="ncCode">Code</label><input id="ncCode" placeholder="WELCOME5" /></div>
+            <div><label for="ncName">Name</label><input id="ncName" placeholder="Welcome $5 Off" /></div>
+            <div><label for="ncType">Discount type</label>
+              <select id="ncType">
+                <option value="fixed">Fixed dollar off</option>
+                <option value="percent">Percentage off</option>
+                <option value="promo_price">Promotional price</option>
+                <option value="free_period">Free period</option>
+              </select></div>
+            <div><label for="ncValue">Amount</label><input id="ncValue" type="number" step="0.01" placeholder="5.00" /></div>
+          </div>
+          <div class="row">
+            <div><label for="ncStart">Starts</label><input id="ncStart" type="date" /></div>
+            <div><label for="ncEnd">Ends</label><input id="ncEnd" type="date" /></div>
+            <div><label for="ncMax">Max redemptions</label><input id="ncMax" type="number" placeholder="100" /></div>
+            <div><label for="ncPerCustomer">Per customer</label>
+              <select id="ncPerCustomer"><option value="once">Once per customer</option>
+                <option value="multiple">Multiple times</option>
+                <option value="once_per_cycle">Once per billing cycle</option></select></div>
+          </div>
+          <div class="row">
+            <div><label for="ncEligible">Eligible customers</label>
+              <select id="ncEligible"><option value="all">All customers</option>
+                <option value="new">New customers only</option>
+                <option value="existing">Existing customers only</option></select></div>
+            <div><label for="ncStack">Stacking</label>
+              <select id="ncStack"><option value="0">Cannot combine</option><option value="1">Can combine</option></select></div>
+            <div><label for="ncDesc">Description</label><input id="ncDesc" /></div>
+          </div>
+          <p class="msg" id="ncMsg" hidden></p>
+          <button class="btn btn-primary" id="ncSave">Create coupon</button>
+          <button class="btn" id="ncCancel">Cancel</button>
+        </div>
+      </div>
+      <div class="card"><div class="table-wrap"><table id="couponTable"></table></div></div>
+      <div class="chart-grid">
+        <div class="card"><div id="chartCouponRedemptions"></div></div>
+        <div class="card"><div id="chartNewVsExisting"></div></div>
+        <div class="card"><div id="chartRevByCoupon"></div></div>
+        <div class="card"><div id="chartDiscByCoupon"></div></div>
+      </div>
+      <div class="card" id="redemptionCard" hidden>
+        <h2 id="redemptionTitle">Redemption history</h2>
+        <div class="table-wrap"><table id="redemptionTable"></table></div>
+      </div>
+    </section>
+
+    <section data-panel="credits" hidden>
+      <h1>Service Credits</h1>
+      <p class="muted small" style="margin-top:-8px">Compensation issued when we made a service mistake.
+        Separate from marketing coupons.</p>
+      <div class="stat-grid" id="creditStats"></div>
+      <div class="card" style="margin-top:14px">
+        <h2>Pending approval</h2>
+        <div class="table-wrap"><table id="pendingTable"></table></div>
+        <p class="msg" id="creditMsg" hidden></p>
+      </div>
+      <div class="chart-grid">
+        <div class="card"><div id="chartCreditReason"></div></div>
+        <div class="card"><div id="chartCreditEmployee"></div></div>
+        <div class="card"><div id="chartCreditCommunity"></div></div>
+        <div class="card">
+          <h3 class="chart-title">Employee credit activity</h3>
+          <div class="table-wrap"><table id="creditActivityTable"></table></div>
+          <p class="muted small">Oversight only — not a ranking.</p>
+        </div>
+      </div>
+      <div class="card">
+        <h2>All credits</h2>
+        <div class="table-wrap"><table id="allCreditsTable"></table></div>
       </div>
     </section>
 

@@ -165,16 +165,20 @@
   }
 
   async function fetchIntroSpots() {
-    if (!DEMO_MODE) {
+    /* Always ask the server. DEMO_MODE means the PAYMENT PROVIDER is not
+       configured, which says nothing about whether the API is reachable —
+       reading the real spot count here keeps the page and the server from
+       reporting different numbers. Falls back only if the request fails. */
+    if (CONFIG.api.enabled) {
       try { return await api('/api/intro-spots'); }
-      catch (err) { console.warn('[Dash] spot count failed', err.message); }
+      catch (err) { console.warn('[Dash] spot count unavailable, using demo count.', err.message); }
     }
     const local = Number(localStorage.getItem('dtp_demo_signups') || 0);
     return { claimed: Math.min(27 + local, CONFIG.intro.totalSpots) };
   }
 
   async function checkServiceArea(zip) {
-    if (!DEMO_MODE) {
+    if (CONFIG.api.enabled) {
       try { return await api(`/api/service-area?zip=${encodeURIComponent(zip)}`); }
       catch (err) { console.warn('[Dash] area check failed', err.message); }
     }
@@ -386,6 +390,14 @@
 
   function shouldShowPromo() {
     if (!CONFIG.intro.enabled || spotsState.soldOut) return false;
+
+    /* ?offer=1 forces the popup even after it has been dismissed, so the
+       offer can be demoed or tested without clearing browser storage.
+       ?offer=0 suppresses it. */
+    const forced = new URLSearchParams(location.search).get('offer');
+    if (forced === '1' || forced === 'true') return true;
+    if (forced === '0' || forced === 'false') return false;
+
     try {
       const at = Number(localStorage.getItem('dtp_promo_dismissed') || 0);
       if (!at) return true;

@@ -18,8 +18,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createCustomer, saveCard, createSubscription,
          verifyCredentials, SquareError, squareEnvironment } from './lib/payments/square.js';
 import { getIntroClaimed, reserveIntroSpot, releaseIntroSpot, recordSignup } from './store.js';
-import { migrate } from './db/index.js';
-import { attachUser } from './lib/rbac.js';
+import { migrate, one } from './db/index.js';
+import { migrateAdmin, migrateCommunities, migrateIssueCodes } from './db/migrate_admin.js';
+import { introCoupon } from './lib/coupons.js';
+import { attachUser, requirePasswordCurrent } from './lib/rbac.js';
 import { purgeExpiredSessions } from './lib/auth.js';
 import { router as authRouter }     from './routes/auth.js';
 import { router as adminRouter }    from './routes/admin.js';
@@ -27,6 +29,9 @@ import { router as employeeRouter } from './routes/employee.js';
 import { router as customerRouter } from './routes/customer.js';
 import { router as photosRouter }   from './routes/photos.js';
 import { router as financeRouter }  from './routes/finance.js';
+import { router as peopleRouter }   from './routes/people.js';
+import { router as discountRouter } from './routes/discounts.js';
+import { router as communityRouter, publicCommunityRoutes } from './routes/communities.js';
 import { attachDevReload } from './lib/devreload.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -83,6 +88,7 @@ app.use((req, res, next) => {
 });
 
 app.use(attachUser);
+app.use('/api', requirePasswordCurrent);
 
 const ALLOWED = (process.env.ALLOWED_ORIGINS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -138,6 +144,19 @@ app.get('/api/config', (req, res) => {
 
 app.get('/api/intro-spots', async (req, res) => {
   try {
+    /* Read from the real coupon system. The old JSON counter is only a
+       fallback for an install that has no launch coupon configured. */
+    const coupon = introCoupon();
+    if (coupon) {
+      return res.json({
+        claimed: coupon.used,
+        totalSpots: coupon.max_redemptions ?? INTRO_TOTAL_SPOTS,
+        code: coupon.code,
+        priceDollars: coupon.discount_type === 'promo_price'
+          ? coupon.discount_value / 100 : null,
+        status: coupon.status,
+      });
+    }
     res.json({ claimed: await getIntroClaimed(), totalSpots: INTRO_TOTAL_SPOTS });
   } catch (err) {
     console.error('[intro-spots]', err);
@@ -255,6 +274,10 @@ app.use('/api/employee', employeeRouter);
 app.use('/api/customer', customerRouter);
 app.use('/api/photos', photosRouter);
 app.use('/api/finance', financeRouter);   // admin-only, enforced inside the router
+app.use('/api/people', peopleRouter);     // admin-only, enforced inside the router
+app.use('/api/promo', discountRouter);    // per-permission, enforced inside the router
+app.use('/api/communities', communityRouter);
+publicCommunityRoutes(app);              // /api/service-check and /api/waitlist are public
 
 /* Gate the dashboard HTML itself. Without this a signed-out visitor could
    load the admin page shell; the API would refuse its calls, but the page
@@ -266,13 +289,25 @@ const ROLE_FOR_PREFIX = {
   '/dashboard/customer': 'customer',
 };
 
+/* A signed-in user with a temporary password can only reach the page that
+   lets them replace it. */
+app.use('/dashboard', (req, res, next) => {
+  if (!req.user) return next();
+  if (req.path.startsWith('/change-password')) return next();
+  const u = one('SELECT must_change_password FROM users WHERE id = ?', req.user.id);
+  if (u?.must_change_password) return res.redirect('/dashboard/change-password.html');
+  next();
+});
+
 app.use('/dashboard', (req, res, next) => {
   const path = '/dashboard' + req.path.replace(/\/$/, '');
   const needed = Object.entries(ROLE_FOR_PREFIX).find(([prefix]) => path.startsWith(prefix))?.[1];
   if (!needed) return next();                       // login page and shared assets
 
   if (!req.user) return res.redirect('/dashboard/login.html');
-  if (req.user.role !== needed) {
+  // A manager uses the admin shell; the API still enforces each permission.
+  const ok = req.user.role === needed || (needed === 'admin' && req.user.role === 'manager');
+  if (!ok) {
     return res.redirect(`/dashboard/${req.user.role}/`);   // send them to their own
   }
   next();
@@ -366,6 +401,8 @@ app.use((err, req, res, next) => {
 /* ---------- Boot ---------- */
 
 migrate();
+const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes()];
+if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
 purgeExpiredSessions();
 setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
 

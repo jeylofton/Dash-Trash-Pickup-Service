@@ -30,6 +30,30 @@ export function requireAuth(req, res, next) {
   next();
 }
 
+/**
+ * While must_change_password is set, block everything except changing it.
+ * Without this, a temporary password would be a fully working login and the
+ * "must change" requirement would be cosmetic.
+ */
+const PASSWORD_EXEMPT = new Set([
+  '/api/auth/me', '/api/auth/logout', '/api/auth/change-password', '/api/auth/login',
+]);
+
+export function requirePasswordCurrent(req, res, next) {
+  if (!req.user) return next();
+  if (PASSWORD_EXEMPT.has(req.path) || PASSWORD_EXEMPT.has(req.originalUrl.split('?')[0])) return next();
+
+  const u = one('SELECT must_change_password FROM users WHERE id = ?', req.user.id);
+  if (u?.must_change_password) {
+    return res.status(403).json({
+      error: 'You must choose a new password before continuing.',
+      code: 'PASSWORD_CHANGE_REQUIRED',
+      redirect: '/dashboard/change-password.html',
+    });
+  }
+  next();
+}
+
 /** requireRole('admin') or requireRole('admin', 'employee') */
 export function requireRole(...roles) {
   return (req, res, next) => {

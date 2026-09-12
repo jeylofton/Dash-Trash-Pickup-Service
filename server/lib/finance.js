@@ -242,6 +242,52 @@ function expenseSplit(start, end) {
 }
 
 /* ============================================================
+   DISCOUNTS — coupons and service credits are counted SEPARATELY
+   because they mean different things: one buys growth, the other
+   pays for a mistake.
+   ============================================================ */
+
+export function couponDiscountTotal(start, end) {
+  return one(
+    `SELECT COALESCE(SUM(discount_cents),0) AS c FROM coupon_redemptions
+      WHERE status = 'completed' AND date(redeemed_at) BETWEEN ? AND ?`, start, end).c;
+}
+
+export function serviceCreditTotal(start, end) {
+  return one(
+    `SELECT COALESCE(SUM(COALESCE(approved_cents, requested_cents)),0) AS c
+       FROM service_credits
+      WHERE status IN ('auto_approved','approved','modified','applied')
+        AND date(requested_at) BETWEEN ? AND ?`, start, end).c;
+}
+
+export function refundTotal(start, end) {
+  return one(
+    `SELECT COALESCE(SUM(amount_cents),0) AS c FROM payments
+      WHERE status = 'refunded' AND date(COALESCE(paid_at, created_at)) BETWEEN ? AND ?`,
+    start, end).c;
+}
+
+/** The full top-line picture an owner needs to judge promotions. */
+export function revenueBreakdown(start, end) {
+  const net = revenueTotal(start, end);          // what was actually collected
+  const coupons = couponDiscountTotal(start, end);
+  const credits = serviceCreditTotal(start, end);
+  const refunds = refundTotal(start, end);
+  // Gross is what would have been billed at list price.
+  const gross = net + coupons;
+
+  return {
+    grossRevenueCents: gross,
+    couponDiscountCents: coupons,
+    serviceCreditCents: credits,
+    refundCents: refunds,
+    netCollectedCents: net - credits,
+    discountRatePct: pct(coupons + credits, gross || 1),
+  };
+}
+
+/* ============================================================
    PROFITABILITY
    ============================================================ */
 
@@ -249,7 +295,11 @@ export function companyProfit(start, end) {
   const revenue = revenueTotal(start, end);
   const labor = laborTotal(start, end);
   const operating = expenseTotal(start, end);
-  const expenses = labor.cents + operating;
+  // Service credits are money handed back, so they reduce profit.
+  // Coupon discounts are already absent from `revenue` (the customer was
+  // charged the discounted price), so counting them here would double-count.
+  const credits = serviceCreditTotal(start, end);
+  const expenses = labor.cents + operating + credits;
   const profit = revenue - expenses;
 
   return {
@@ -258,11 +308,13 @@ export function companyProfit(start, end) {
     laborCents: labor.cents,
     laborHours: labor.hours,
     operatingCents: operating,
+    serviceCreditCents: credits,
     expensesCents: expenses,
     grossProfitCents: revenue - labor.cents,   // revenue less direct service labor
     profitCents: profit,
     marginPct: pct(profit, revenue),
     status: profitStatus(profit, revenue),
+    breakdown: revenueBreakdown(start, end),
   };
 }
 

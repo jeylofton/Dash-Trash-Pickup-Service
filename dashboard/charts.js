@@ -164,7 +164,12 @@ export function lineChart(el, { data, series, xKey = 'bucket', title, height = 2
    Horizontal bars — by community, by route, by category.
    ============================================================ */
 export function barChart(el, { data, title, valueKey = 'amount', labelKey = 'label',
-                               color = SERIES.revenue.color, statusKey = null, max = 8 }) {
+                               color = SERIES.revenue.color, statusKey = null, max = 8,
+                               unit = 'money' }) {
+  // Not every bar chart measures dollars — counts must not gain a $ sign.
+  const fmt = unit === 'count'
+    ? (n) => Math.round(n).toLocaleString()
+    : money;
   if (!data?.length) { el.innerHTML = `<div class="empty">No data for this range.</div>`; return; }
 
   const id = uid();
@@ -189,17 +194,17 @@ export function barChart(el, { data, title, valueKey = 'amount', labelKey = 'lab
         const st = statusKey && r[statusKey] ? STATUS[r[statusKey]] : null;
         const fill = st ? st.color : (v < 0 ? STATUS.losing_money.color : color);
         return `
-          <div class="bar-row" title="${esc(r[labelKey])}: ${money(v)}">
+          <div class="bar-row" title="${esc(r[labelKey])}: ${fmt(v)}">
             <div class="bar-label">${esc(r[labelKey])}</div>
             <div class="bar-track">
               <div class="bar-fill" style="width:${pctW}%;background:${fill}"></div>
             </div>
-            <div class="bar-value">${money(v)}${
+            <div class="bar-value">${fmt(v)}${
               st ? ` <span class="status-chip" style="color:${st.color}">${st.icon} ${st.label}</span>` : ''}</div>
           </div>`;
       }).join('')}
     </div>
-    ${tableView(id, [labelKey, 'value'], rows.map(r => [r[labelKey], money(r[valueKey] ?? 0)]))}`;
+    ${tableView(id, [labelKey, 'value'], rows.map(r => [r[labelKey], fmt(r[valueKey] ?? 0)]))}`;
 }
 
 /* ---------- shared hover behaviour ---------- */

@@ -4,14 +4,18 @@ import { requireRole, requireEmployee, employeeMayServiceUnit } from '../lib/rba
 import { audit } from '../lib/audit.js';
 import { storage, uploadProblem, MAX_BYTES } from '../lib/storage.js';
 import { generateServiceDay, today, DAY_NAMES } from '../lib/schedule.js';
+import { setting } from '../lib/permissions.js';
 import { clockIn, clockOut, openShift, shiftsFor, entryPayCents,
          currentPayPeriod, rateOn, MINUTES_SQL } from '../lib/timeclock.js';
 
 export const router = Router();
 router.use(requireRole('employee'), requireEmployee);
 
-const ISSUE_CODES = ['no_trash_outside','unable_to_access','not_properly_bagged',
-                     'oversized_item','customer_not_found','other'];
+const ISSUE_CODES = [
+  'no_trash_outside','unable_to_access','not_properly_bagged','oversized_item',
+  'restricted_item','customer_not_home','incorrect_address','blocked_access',
+  'animal_safety','property_issue','service_problem','customer_not_found','other',
+];
 
 /** Routes assigned to THIS employee on a date. Never takes an id from the URL. */
 function myRoutes(employeeId, date) {
@@ -79,10 +83,9 @@ router.get('/stops', (req, res) => {
   const scope = groupId > 0 ? 'un.community_id = ?' : 'un.id = ?';
   const scopeValue = groupId > 0 ? groupId : -groupId;
 
-  res.json({
-    date,
-    units: all(`
-      SELECT ss.id AS stop_id, ss.status, un.id AS unit_id, un.label, b.name AS building,
+  const units = all(`
+      SELECT ss.id AS stop_id, ss.status, ss.customer_id, un.id AS unit_id, un.label,
+             b.name AS building, b.sort_order AS building_order,
              cu.first_name, cu.last_name,
              pr.id AS record_id, pr.status AS record_status, pr.issue_code, pr.notes, pr.completed_at
         FROM service_stops ss
@@ -92,7 +95,27 @@ router.get('/stops', (req, res) => {
         LEFT JOIN users cu ON cu.id = c.user_id
         LEFT JOIN pickup_records pr ON pr.service_stop_id = ss.id
        WHERE ss.service_date = ? AND ss.route_id IN (${placeholders}) AND ${scope}
-       ORDER BY b.sort_order, un.label`, date, ...routeIds, scopeValue),
+       ORDER BY b.sort_order, un.label`, date, ...routeIds, scopeValue);
+
+  // Group by building so a 52-unit property reads as a set of short lists.
+  const buildings = [];
+  for (const u of units) {
+    const name = u.building || 'Addresses';
+    let group = buildings.find(g => g.name === name);
+    if (!group) { group = { name, units: [], done: 0 }; buildings.push(group); }
+    group.units.push(u);
+    if (u.status !== 'pending') group.done++;
+  }
+
+  res.json({
+    date,
+    units,
+    buildings: buildings.map(b => ({ ...b, total: b.units.length, remaining: b.units.length - b.done })),
+    progress: {
+      done: units.filter(u => u.status !== 'pending').length,
+      total: units.length,
+    },
+    requirePhoto: setting('pickup.require_photo', 1) === 1,
   });
 });
 
@@ -104,13 +127,29 @@ router.get('/stops', (req, res) => {
  */
 router.post('/pickups', async (req, res) => {
   const date = req.body?.serviceDate || today();
-  const { unitId, status, issueCode, notes, photo } = req.body || {};
+  const { unitId, status, issueCode, notes, photo, noteVisibleToCustomer } = req.body || {};
 
   if (!unitId || !['completed', 'issue'].includes(status)) {
     return res.status(400).json({ error: 'unitId and a valid status are required.' });
   }
   if (status === 'issue' && !ISSUE_CODES.includes(issueCode)) {
     return res.status(400).json({ error: 'Choose a reason for the issue.' });
+  }
+
+  /* Photo verification. A completed pickup is a claim that work was done,
+     so it needs evidence. Both requirements are settings, not constants,
+     so the rule can be relaxed without a code change. */
+  const needPhoto = status === 'completed'
+    ? setting('pickup.require_photo', 1) === 1
+    : setting('pickup.require_issue_photo', 0) === 1;
+
+  if (needPhoto && !photo?.dataUrl) {
+    return res.status(400).json({
+      error: status === 'completed'
+        ? 'A photo is required to mark a pickup completed.'
+        : 'A photo is required for this issue report.',
+      code: 'PHOTO_REQUIRED',
+    });
   }
 
   // THE ownership check: is this stop actually on this employee's route today?
@@ -157,9 +196,17 @@ router.post('/pickups', async (req, res) => {
     return id;
   });
 
+  // An employee note is internal by default; it reaches the customer only
+  // when explicitly marked visible.
+  if (notes && noteVisibleToCustomer && stop.customer_id) {
+    run(`INSERT INTO customer_notes (customer_id, unit_id, author_user_id, body, visible_to_customer)
+         VALUES (?, ?, ?, ?, 1)`, stop.customer_id, unitId, req.user.id, notes);
+  }
+
   audit(req, 'pickup.recorded', {
     entityType: 'pickup_record', entityId: recordId,
-    detail: { unitId, status, issueCode: issueCode ?? null, hasPhoto: Boolean(stored) },
+    detail: { unitId, status, issueCode: issueCode ?? null, hasPhoto: Boolean(stored),
+              noteShared: Boolean(notes && noteVisibleToCustomer) },
   });
 
   res.status(201).json({ ok: true, recordId, photoSaved: Boolean(stored) });

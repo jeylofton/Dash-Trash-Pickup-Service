@@ -60,30 +60,47 @@ async function openGroup(groupId, name) {
   const done = data.units.filter(u => u.status !== 'pending').length;
   $('#unitsMeta').textContent = `${done} of ${data.units.length} complete · ${today.dayName} route`;
 
-  $('#unitList').innerHTML = data.units.map(u => {
-    const cls = u.status === 'completed' ? 'done' : u.status === 'issue' ? 'issue' : '';
-    const mark = u.status === 'completed' ? '✓' : u.status === 'issue' ? '!' : '';
-    const sub = u.status === 'issue'
-      ? ISSUE_LABELS[u.issue_code] || 'Issue'
-      : u.first_name ? `${esc(u.first_name)} ${esc(u.last_name || '')}` : 'Vacant';
-    return `
-      <button class="unit-row ${cls}" data-unit="${u.unit_id}" data-label="${esc(u.label)}">
-        <span class="unit-check">${mark}</span>
-        <span>
-          <span class="unit-label">${esc(u.label)}</span>
-          <span class="stop-meta" style="display:block">${sub}${u.completed_at ? ' · ' + fmtTime(u.completed_at) : ''}</span>
-        </span>
-      </button>`;
-  }).join('') || `<div class="empty">No units scheduled here today.</div>`;
+  requirePhoto = data.requirePhoto !== false;
+
+  // Grouped by building so a 52-unit property reads as short lists.
+  $('#unitList').innerHTML = (data.buildings || []).map(group => `
+    <div class="building-group">
+      <div class="building-head">
+        <span>${esc(group.name)}</span>
+        <span class="building-count">${group.done}/${group.total}</span>
+      </div>
+      ${group.units.map(u => {
+        const cls = u.status === 'completed' ? 'done' : u.status === 'issue' ? 'issue' : '';
+        const mark = u.status === 'completed' ? '✓' : u.status === 'issue' ? '!' : '';
+        const sub = u.status === 'issue'
+          ? (ISSUE_LABELS[u.issue_code] || 'Issue')
+          : u.first_name ? `${esc(u.first_name)} ${esc(u.last_name || '')}` : 'Vacant';
+        return `
+          <button class="unit-row ${cls}" data-unit="${u.unit_id}" data-label="${esc(u.label)}"
+                  data-customer="${u.customer_id ?? ''}" data-building="${esc(group.name)}">
+            <span class="unit-check">${mark}</span>
+            <span>
+              <span class="unit-label">${esc(u.label)}</span>
+              <span class="stop-meta" style="display:block">${sub}${u.completed_at ? ' · ' + fmtTime(u.completed_at) : ''}</span>
+            </span>
+          </button>`;
+      }).join('')}
+    </div>`).join('') || `<div class="empty">No units scheduled here today.</div>`;
 
   $$('#unitList [data-unit]').forEach(b =>
-    b.addEventListener('click', () => openSheet(Number(b.dataset.unit), b.dataset.label)));
+    b.addEventListener('click', () => openSheet(Number(b.dataset.unit), b.dataset.label,
+                                                b.dataset.customer ? Number(b.dataset.customer) : null,
+                                                b.dataset.building)));
 
   panels('units');
 }
 
 /* ---------- record a pickup ---------- */
-function openSheet(unitId, label) {
+let currentUnitCustomerId = null;
+let requirePhoto = true;
+
+function openSheet(unitId, label, customerId, building) {
+  currentUnitCustomerId = customerId ?? null;
   let mode = 'completed', issueCode = null, photoDataUrl = null, photoMime = null;
 
   const el = document.createElement('div');
@@ -91,7 +108,9 @@ function openSheet(unitId, label) {
   el.innerHTML = `
     <div class="sheet" role="dialog" aria-modal="true" aria-label="Record pickup for ${esc(label)}">
       <h2>${esc(label)}</h2>
-      <p class="muted small" id="sheetSub">Mark this pickup complete, or report a problem.</p>
+      <p class="muted small" id="sheetSub">
+        ${esc(currentGroup?.name || '')}${building ? ' · ' + esc(building) : ''}
+      </p>
 
       <button class="btn btn-primary big-btn" data-mode="completed" aria-pressed="true">✓ Pickup Completed</button>
       <button class="btn big-btn" data-mode="issue" aria-pressed="false">⚠ Report a problem</button>
@@ -104,8 +123,9 @@ function openSheet(unitId, label) {
       </div>
 
       <div class="photo-drop">
-        <strong class="small">Photo${''}</strong>
-        <p class="muted small" style="margin:4px 0 9px">Show the trash was collected.</p>
+        <strong class="small">Photo${requirePhoto ? ' — required' : ''}</strong>
+        <p class="muted small" style="margin:4px 0 9px">Show enough of the doorway or unit area to
+          identify where the service happened.</p>
         <input type="file" accept="image/*" capture="environment" id="photoInput" />
         <div id="photoPreview"></div>
       </div>
@@ -114,6 +134,25 @@ function openSheet(unitId, label) {
         <label for="pickupNotes">Notes (optional)</label>
         <textarea id="pickupNotes" rows="2" placeholder="Anything worth recording"></textarea>
       </div>
+
+      <details class="photo-drop" style="text-align:left">
+        <summary style="cursor:pointer;font-weight:800">Issue a service credit</summary>
+        <p class="muted small" style="margin:8px 0">For a mistake we made — a missed or late pickup,
+          or damage. Up to <strong id="creditLimit">$5</strong> applies immediately; anything higher
+          goes to a manager for approval.</p>
+        <div class="credit-quick">
+          ${[0, 1, 2, 3, 4, 5].map(v =>
+            `<button type="button" class="btn credit-chip" data-credit="${v}">$${v}</button>`).join('')}
+        </div>
+        <div class="field"><label for="creditAmount">Amount</label>
+          <input id="creditAmount" type="number" step="0.01" min="0" placeholder="5.00" /></div>
+        <div class="field"><label for="creditReason">Reason</label>
+          <select id="creditReason"></select></div>
+        <div class="field"><label for="creditNotes">Notes</label>
+          <textarea id="creditNotes" rows="2" placeholder="What happened"></textarea></div>
+        <button class="btn big-btn" id="issueCredit" type="button">Issue credit</button>
+        <p class="msg" id="creditSheetMsg" hidden></p>
+      </details>
 
       <p class="msg error" id="sheetError" hidden></p>
       <button class="btn btn-primary big-btn" id="submitPickup">Submit</button>
@@ -152,6 +191,46 @@ function openSheet(unitId, label) {
     reader.readAsDataURL(file);
   });
 
+  /* service credit — separate from the pickup record itself */
+  (async () => {
+    try {
+      const meta = await api('/api/promo/credits/reasons');
+      $('#creditLimit', el).textContent = '$' + Number(meta.employeeMaxDollars).toFixed(2);
+      $('#creditReason', el).innerHTML = meta.reasons
+        .map(r => `<option value="${r.value}">${esc(r.label)}</option>`).join('');
+    } catch { /* the section simply stays empty if unavailable */ }
+  })();
+
+  $$('[data-credit]', el).forEach(b => b.addEventListener('click', () => {
+    $('#creditAmount', el).value = b.dataset.credit;
+    $$('[data-credit]', el).forEach(x => x.classList.toggle('is-on', x === b));
+  }));
+
+  $('#issueCredit', el).addEventListener('click', async () => {
+    const msg = $('#creditSheetMsg', el);
+    const amount = Number($('#creditAmount', el).value);
+    if (!amount || amount <= 0) {
+      msg.textContent = 'Enter an amount.'; msg.className = 'msg error'; msg.hidden = false; return;
+    }
+    const customerId = currentUnitCustomerId;
+    if (!customerId) {
+      msg.textContent = 'This unit has no customer on file.'; msg.className = 'msg error'; msg.hidden = false; return;
+    }
+    try {
+      const r = await api('/api/promo/credits', {
+        method: 'POST',
+        body: JSON.stringify({
+          customerId, amount, reason: $('#creditReason', el).value,
+          notes: $('#creditNotes', el).value || undefined,
+        }),
+      });
+      msg.textContent = r.message;
+      msg.className = r.status === 'pending' ? 'msg' : 'msg ok';
+      msg.hidden = false;
+      $('#creditAmount', el).value = '';
+    } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
+  });
+
   $('#submitPickup', el).addEventListener('click', async () => {
     const btn = $('#submitPickup', el), err = $('#sheetError', el);
     err.hidden = true;
@@ -172,7 +251,10 @@ function openSheet(unitId, label) {
       close();
       await openGroup(currentGroup.groupId, currentGroup.name);
     } catch (ex) {
-      err.textContent = ex.message; err.hidden = false;
+      err.textContent = ex.code === 'PHOTO_REQUIRED'
+        ? 'Take a photo before marking this pickup complete.'
+        : ex.message;
+      err.hidden = false;
       btn.disabled = false; btn.textContent = 'Submit';
     }
   });

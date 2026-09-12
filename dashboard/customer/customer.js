@@ -77,7 +77,22 @@ async function loadPlan() {
 }
 
 async function loadPayments() {
-  const rows = await api('/api/customer/payments');
+  const [rows, credits] = await Promise.all([
+    api('/api/customer/payments'),
+    api('/api/customer/credits').catch(() => ({ balance: 0, credits: [] })),
+  ]);
+
+  if (credits.credits.length) {
+    $('#creditCard').hidden = false;
+    $('#creditTable').innerHTML = table(['Date', 'Credit', 'Amount'],
+      credits.credits.map(c => `<tr>
+        <td class="small">${fmtDate(c.date)}</td>
+        <td>${esc(c.label)}</td>
+        <td class="num" style="color:var(--ok)"><strong>-${money(c.amount)}</strong></td>
+      </tr>`).join('')
+      + `<tr><td colspan="2"><strong>Credit balance</strong></td>
+           <td class="num"><strong style="color:var(--ok)">-${money(credits.balance)}</strong></td></tr>`);
+  }
   $('#payTable').innerHTML = table(['Date', 'Plan', 'Amount', 'Status'],
     rows.map(p => `<tr>
       <td class="small">${fmtDate(p.paid_at || p.created_at)}</td>

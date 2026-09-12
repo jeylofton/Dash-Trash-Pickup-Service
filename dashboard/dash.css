@@ -262,3 +262,15 @@ label { font-size:.8rem; font-weight:800; display:block; margin-bottom:5px; }
 .pay-strip div { background:var(--sand); border-radius:10px; padding:9px 6px; }
 .pay-strip .k { font-size:.62rem; font-weight:900; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); }
 .pay-strip .v { font-size:1.05rem; font-weight:900; }
+
+/* building groups + quick credit chips (employee) */
+.building-group { margin-bottom: 16px; }
+.building-head {
+  display:flex; justify-content:space-between; align-items:center;
+  font-size:.72rem; font-weight:900; letter-spacing:.09em; text-transform:uppercase;
+  color:var(--muted); padding:0 3px 6px;
+}
+.building-count { color:var(--orange-dark); }
+.credit-quick { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+.credit-chip { flex:1 1 auto; min-width:52px; min-height:46px; font-weight:900; }
+.credit-chip.is-on { background:var(--orange); color:#fff; border-color:transparent; }

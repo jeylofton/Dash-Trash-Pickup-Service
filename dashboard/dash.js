@@ -55,9 +55,13 @@ export const fmtTime = (ts) => ts ? new Date(ts.replace(' ', 'T') + 'Z')
   .toLocaleTimeString(undefined, { hour:'numeric', minute:'2-digit' }) : '';
 
 export const ISSUE_LABELS = {
-  no_trash_outside:'No trash outside', unable_to_access:'Unable to access',
-  not_properly_bagged:'Not properly bagged', oversized_item:'Oversized item',
-  customer_not_found:'Customer not found', other:'Other problem',
+  no_trash_outside:'No trash outside', unable_to_access:'Unable to access property',
+  not_properly_bagged:'Trash improperly bagged', oversized_item:'Oversized item',
+  restricted_item:'Restricted item', customer_not_home:'Customer not home',
+  incorrect_address:'Incorrect address', blocked_access:'Blocked access',
+  animal_safety:'Animal / safety issue', property_issue:'Property issue',
+  service_problem:'Service problem', customer_not_found:'Customer not found',
+  other:'Other problem',
 };
 
 export function statusPill(status) {
