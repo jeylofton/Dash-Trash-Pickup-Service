@@ -3,7 +3,7 @@
 A marketing and signup website for **Dash Trash Pickup**, a doorstep valet trash
 collection service for apartment and townhome communities in Columbus, Georgia.
 
-> *Your trash. Our dash.* — residents leave tied household trash outside their
+> _Your trash. Our dash._ — residents leave tied household trash outside their
 > door twice a week, and we carry it to the community dumpster so they don't
 > have to.
 
@@ -28,15 +28,15 @@ three files and a folder of images.
 
 ## What's in it
 
-| Feature | Notes |
-|---|---|
-| Responsive marketing page | Hero, how-it-works, audience cards, FAQ, contact |
-| Promotional coupon modal | Limited introductory offer, dismissible, remembered for 7 days |
-| Three pricing plans | Monthly, quarterly, annual — all calculated from one config value |
-| Six-step signup flow | Plan → Info → Address → Availability → Payment → Confirmation |
-| Service-area check | Validates the customer's ZIP against a service list |
-| SEO + social metadata | Open Graph tags, canonical URL, `LocalBusiness` JSON-LD |
-| Accessibility | Keyboard-navigable modal with focus trapping, ARIA states, reduced-motion support |
+| Feature                   | Notes                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| Responsive marketing page | Hero, how-it-works, audience cards, FAQ, contact                                  |
+| Promotional coupon modal  | Limited introductory offer, dismissible, remembered for 7 days                    |
+| Three pricing plans       | Monthly, quarterly, annual — all calculated from one config value                 |
+| Six-step signup flow      | Plan → Info → Address → Availability → Payment → Confirmation                     |
+| Service-area check        | Validates the customer's ZIP against a service list                               |
+| SEO + social metadata     | Open Graph tags, canonical URL, `LocalBusiness` JSON-LD                           |
+| Accessibility             | Keyboard-navigable modal with focus trapping, ARIA states, reduced-motion support |
 
 ---
 
@@ -48,10 +48,10 @@ in your browser.
 To serve it over HTTP instead (closer to how it behaves when deployed):
 
 ```bash
-python3 -m http.server 8000
+python3 -m http.server 5000
 ```
 
-Then open <http://localhost:8000>.
+Then open <http://localhost:5000>.
 
 ---
 
@@ -90,28 +90,28 @@ in the HTML — change a value here and it updates everywhere on the page.
 const CONFIG = {
   intro: {
     enabled: true,
-    price: 18,              // introductory monthly rate
-    totalSpots: 100,        // how many customers get it
-    popupDelayMs: 1400,     // delay before the coupon appears
-    remindAfterDays: 7,     // don't re-show for this many days after dismissal
+    price: 18, // introductory monthly rate
+    totalSpots: 100, // how many customers get it
+    popupDelayMs: 1400, // delay before the coupon appears
+    remindAfterDays: 7, // don't re-show for this many days after dismissal
   },
 
   pricing: {
-    monthly: 28,            // base monthly price
-    quarterlyDiscount: 10,  // $ off the 3-month total
-    annualDiscount: 60,     // $ off the 12-month total
-    currency: '$',
+    monthly: 28, // base monthly price
+    quarterlyDiscount: 10, // $ off the 3-month total
+    annualDiscount: 60, // $ off the 12-month total
+    currency: "$",
   },
 
   schedule: {
-    days: ['Tuesday', 'Thursday'],
+    days: ["Tuesday", "Thursday"],
     perWeek: 2,
-    varianceNote: 'Pickup days may vary by community or service area.',
+    varianceNote: "Pickup days may vary by community or service area.",
   },
 
   serviceArea: {
-    city: 'Columbus, Georgia',
-    zips: ['31901', '31902', /* ... */],
+    city: "Columbus, Georgia",
+    zips: ["31901", "31902" /* ... */],
   },
 };
 ```
@@ -120,12 +120,12 @@ const CONFIG = {
 
 Quarterly and annual totals are **calculated**, never typed in by hand:
 
-| Plan | Formula | Total | Effective /mo |
-|---|---|---|---|
-| Monthly | `monthly` | $28 | $28.00 |
-| Quarterly | `monthly × 3 − quarterlyDiscount` | $74 | $24.67 |
-| Annual | `monthly × 12 − annualDiscount` | $276 | $23.00 |
-| Introductory | `intro.price` | $18 | $18.00 |
+| Plan         | Formula                           | Total | Effective /mo |
+| ------------ | --------------------------------- | ----- | ------------- |
+| Monthly      | `monthly`                         | $28   | $28.00        |
+| Quarterly    | `monthly × 3 − quarterlyDiscount` | $74   | $24.67        |
+| Annual       | `monthly × 12 − annualDiscount`   | $276  | $23.00        |
+| Introductory | `intro.price`                     | $18   | $18.00        |
 
 > **When changing discounts, check the effective monthly column.** The longer
 > commitment should always give the better per-month rate, or customers have no
@@ -138,8 +138,8 @@ Edit `schedule.days`. The page builds every sentence from that array and handles
 the grammar — one day, two days, or more:
 
 ```js
-days: ['Tuesday', 'Thursday']              // "Tuesday and Thursday"
-days: ['Monday', 'Wednesday', 'Friday']    // "Monday, Wednesday and Friday"
+days: ["Tuesday", "Thursday"]; // "Tuesday and Thursday"
+days: ["Monday", "Wednesday", "Friday"]; // "Monday, Wednesday and Friday"
 ```
 
 The variance wording ("Pickup days may vary by community or service area")
@@ -167,7 +167,7 @@ Complete payment
 Spot consumed  ←  only here, in submitSignup()
 ```
 
-The remaining count renders as *"73 introductory spots remaining."* in both the
+The remaining count renders as _"73 introductory spots remaining."_ in both the
 coupon and the pricing section. When it reaches zero, the offer block and the
 introductory plan option hide themselves automatically.
 
@@ -179,11 +179,11 @@ The site currently runs on demo logic. Three functions in `scripts.js` are the
 only places that talk to a server — replace their bodies and nothing else needs
 to change:
 
-| Function | Replace with | Returns |
-|---|---|---|
-| `fetchIntroSpots()` | `GET /api/intro-spots` | `{ claimed: number }` |
-| `submitSignup(data)` | `POST /api/checkout` | `{ ok, confirmationId, introApplied }` |
-| `checkServiceArea(zip)` | `GET /api/service-area?zip=` | `{ available: boolean }` |
+| Function                | Replace with                 | Returns                                |
+| ----------------------- | ---------------------------- | -------------------------------------- |
+| `fetchIntroSpots()`     | `GET /api/intro-spots`       | `{ claimed: number }`                  |
+| `submitSignup(data)`    | `POST /api/checkout`         | `{ ok, confirmationId, introApplied }` |
+| `checkServiceArea(zip)` | `GET /api/service-area?zip=` | `{ available: boolean }`               |
 
 They are already `async`, so swapping in `fetch()` calls is a direct substitution.
 
@@ -206,7 +206,7 @@ The site is static, so any host works. Since it's already on GitHub, the simples
 option is **GitHub Pages**:
 
 1. Repository → **Settings** → **Pages**
-2. Under *Source*, choose branch `main` and folder `/ (root)`
+2. Under _Source_, choose branch `main` and folder `/ (root)`
 3. Save — the site publishes at
    `https://jeylofton.github.io/Dash-Trash-Pickup-Service/`
 
@@ -266,4 +266,4 @@ A few decisions worth knowing about if you come back to this later:
 ## Credits
 
 Design and build by **Jey Lofton**.
-Logo: Dash Trash Pickup — *Cleaner Communities. Happier Living.*
+Logo: Dash Trash Pickup — _Cleaner Communities. Happier Living._
