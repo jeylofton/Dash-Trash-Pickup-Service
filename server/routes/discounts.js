@@ -4,7 +4,7 @@
    ============================================================ */
 
 import { Router } from 'express';
-import { one, all, run } from '../db/index.js';
+import { one, all, run, tx } from '../db/index.js';
 import { requireAuth, requireEmployee, currentEmployee } from '../lib/rbac.js';
 import { requirePermission, hasPermission, setting, setSetting, permissionsFor } from '../lib/permissions.js';
 import { audit } from '../lib/audit.js';
@@ -13,6 +13,7 @@ import {
 } from '../lib/coupons.js';
 import { REASONS, REASON_LABELS, GRANTED, createCredit, decide, customerBalanceCents } from '../lib/credits.js';
 import { resolveRange, dollars, pct } from '../lib/finance.js';
+import { deletability, assertDeletable } from '../lib/deletable.js';
 
 export const router = Router();
 
@@ -22,7 +23,7 @@ const money = (c) => dollars(c || 0);
    COUPONS — manage (admin or a manager with coupons.manage)
    ============================================================ */
 
-router.get('/coupons', requirePermission('coupons.manage'), (req, res) => {
+router.get('/coupons', requirePermission('coupons.view','coupons.create','coupons.edit'), (req, res) => {
   res.json(all('SELECT * FROM coupons ORDER BY is_intro DESC, created_at DESC').map(c => {
     const w = withStatus(c);
     const stats = one(`
@@ -46,7 +47,7 @@ router.get('/coupons', requirePermission('coupons.manage'), (req, res) => {
   }));
 });
 
-router.post('/coupons', requirePermission('coupons.manage'), (req, res) => {
+router.post('/coupons', requirePermission('coupons.create'), (req, res) => {
   const b = req.body || {};
   if (!b.code || !b.name) return res.status(400).json({ error: 'Code and name are required.' });
   if (!DISCOUNT_TYPES.includes(b.discountType)) {
@@ -90,7 +91,7 @@ router.post('/coupons', requirePermission('coupons.manage'), (req, res) => {
   res.status(201).json({ id });
 });
 
-router.patch('/coupons/:id', requirePermission('coupons.manage'), (req, res) => {
+router.patch('/coupons/:id', requirePermission('coupons.edit','coupons.disable'), (req, res) => {
   const c = one('SELECT * FROM coupons WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Coupon not found.' });
   const b = req.body || {};
@@ -118,8 +119,36 @@ router.patch('/coupons/:id', requirePermission('coupons.manage'), (req, res) => 
   res.json({ ok: true });
 });
 
+router.get('/coupons/:id/deletable', requirePermission('coupons.view'), (req, res) => {
+  const c = one('SELECT * FROM coupons WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Coupon not found.' });
+  res.json({ ...deletability('coupon', c.id, c), name: c.name, code: c.code });
+});
+
+router.delete('/coupons/:id', requirePermission('coupons.edit'), (req, res) => {
+  const c = one('SELECT * FROM coupons WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Coupon not found.' });
+
+  try {
+    assertDeletable('coupon', c.id, c);
+  } catch (err) {
+    return res.status(err.status).json({
+      error: err.message, code: err.code, blockers: err.blockers,
+      suggestion: 'Disable this coupon instead — its redemption history stays intact.',
+    });
+  }
+
+  tx(() => {
+    run('DELETE FROM coupon_plans WHERE coupon_id = ?', c.id);
+    run('DELETE FROM coupons WHERE id = ?', c.id);
+  });
+  audit(req, 'coupon.deleted', { entityType: 'coupon', entityId: c.id,
+                                 detail: { code: c.code, name: c.name, note: 'never redeemed' } });
+  res.json({ ok: true, message: `Coupon ${c.code} was permanently deleted.` });
+});
+
 /** Redemption history — never deleted, searchable. */
-router.get('/coupons/:id/redemptions', requirePermission('coupons.manage'), (req, res) => {
+router.get('/coupons/:id/redemptions', requirePermission('coupons.view','coupons.create','coupons.edit'), (req, res) => {
   res.json(all(`
     SELECT r.*, u.first_name, u.last_name, u.email, p.code AS plan_code
       FROM coupon_redemptions r
@@ -135,7 +164,7 @@ router.get('/coupons/:id/redemptions', requirePermission('coupons.manage'), (req
 });
 
 /** Coupon analytics + chart series. */
-router.get('/coupon-analytics', requirePermission('coupons.manage'), (req, res) => {
+router.get('/coupon-analytics', requirePermission('coupons.analytics.view'), (req, res) => {
   const { start, end } = resolveRange(req.query.range, req.query.from, req.query.to);
 
   const byCoupon = all(`
@@ -335,7 +364,7 @@ router.post('/credits/:id/decide', requirePermission('credits.approve'), (req, r
 
 /* ---------- credit reporting ---------- */
 
-router.get('/credit-report', requirePermission('reports.view'), (req, res) => {
+router.get('/credit-report', requirePermission('credits.reports.view','reports.view'), (req, res) => {
   const { start, end } = resolveRange(req.query.range, req.query.from, req.query.to);
   const inRange = `date(requested_at) BETWEEN '${start}' AND '${end}'`;
 
@@ -404,7 +433,7 @@ router.get('/settings', requirePermission('reports.view'), (req, res) => {
   });
 });
 
-router.patch('/settings/:key', requirePermission('accounts.manage'), (req, res) => {
+router.patch('/settings/:key', requirePermission('system.settings.manage'), (req, res) => {
   const s = one('SELECT * FROM app_settings WHERE key = ?', req.params.key);
   if (!s) return res.status(404).json({ error: 'Unknown setting.' });
   const value = Number(req.body?.value);
@@ -417,11 +446,11 @@ router.patch('/settings/:key', requirePermission('accounts.manage'), (req, res) 
   res.json({ ok: true });
 });
 
-router.get('/role-permissions', requirePermission('accounts.manage'), (req, res) => {
+router.get('/role-permissions', requirePermission('system.roles.manage'), (req, res) => {
   res.json(all('SELECT * FROM role_permissions ORDER BY role, permission'));
 });
 
-router.patch('/role-permissions', requirePermission('accounts.manage'), (req, res) => {
+router.patch('/role-permissions', requirePermission('system.permissions.manage'), (req, res) => {
   const { role, permission, allowed } = req.body || {};
   if (role === 'admin') return res.status(400).json({ error: 'Admin permissions cannot be restricted.' });
   const existing = one('SELECT * FROM role_permissions WHERE role = ? AND permission = ?', role, permission);

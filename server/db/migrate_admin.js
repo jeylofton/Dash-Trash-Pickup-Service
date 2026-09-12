@@ -59,7 +59,11 @@ export function migrateAdmin() {
 
   /* --- users.role: add 'manager' --- */
   const userDdl = one(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`)?.sql || '';
-  if (!userDdl.includes("'manager'")) {
+  /* Only run while the OLD fixed CHECK is still present. A later migration
+     removes that CHECK entirely for custom roles; without this guard this
+     step would try to re-impose it and fail on any custom role key. */
+  const hasFixedRoleCheck = /CHECK\s*\(\s*role\s+IN/i.test(userDdl);
+  if (hasFixedRoleCheck && !userDdl.includes("'manager'")) {
     db.exec('PRAGMA foreign_keys = OFF');
     db.exec('BEGIN');
     try {
@@ -109,16 +113,22 @@ export function migrateAdmin() {
     ['reports.view', 1],
     ['financials.view', 0], ['payroll.view', 0], ['accounts.manage', 0],
   ];
-  const existing = new Set(all(`SELECT permission FROM role_permissions WHERE role='manager'`)
-    .map(r => r.permission));
-  let seeded = 0;
-  for (const [perm, allowed] of MANAGER_DEFAULTS) {
-    if (existing.has(perm)) continue;
-    db.prepare(`INSERT INTO role_permissions (role, permission, allowed) VALUES ('manager', ?, ?)`)
-      .run(perm, allowed);
-    seeded++;
+  /* This seeded the ORIGINAL coarse permissions against a `role` column.
+     migrateAdminControls later renames that column to `role_key` and seeds
+     the granular set, so run this only on a database still using the old
+     shape — otherwise it would fail on a column that no longer exists. */
+  if (columns('role_permissions').includes('role')) {
+    const existing = new Set(all(`SELECT permission FROM role_permissions WHERE role='manager'`)
+      .map(r => r.permission));
+    let seeded = 0;
+    for (const [perm, allowed] of MANAGER_DEFAULTS) {
+      if (existing.has(perm)) continue;
+      db.prepare(`INSERT INTO role_permissions (role, permission, allowed) VALUES ('manager', ?, ?)`)
+        .run(perm, allowed);
+      seeded++;
+    }
+    if (seeded) changes.push(`${seeded} manager permission default(s) seeded`);
   }
-  if (seeded) changes.push(`${seeded} manager permission default(s) seeded`);
 
   /* --- a profile row for every existing employee --- */
   const missing = all(`SELECT e.id FROM employees e
@@ -235,4 +245,213 @@ export function migrateIssueCodes() {
   } finally {
     db.exec('PRAGMA foreign_keys = ON');
   }
+}
+
+/* ============================================================
+   Routes, communities, and role migration for the admin-control
+   phase. Each step is guarded so re-running is safe.
+   ============================================================ */
+export function migrateAdminControls() {
+  const changes = [];
+
+  /* --- routes: description, times, service area, widened status --- */
+  const routeDdl = one(`SELECT sql FROM sqlite_master WHERE type='table' AND name='routes'`)?.sql || '';
+  if (!routeDdl.includes('archived')) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    try {
+      const cols = columns('routes');
+      db.exec(`
+        CREATE TABLE routes_new (
+          id             INTEGER PRIMARY KEY AUTOINCREMENT,
+          name           TEXT    NOT NULL,
+          description    TEXT,
+          day_of_week    INTEGER NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+          start_time     TEXT,
+          estimated_end_time TEXT,
+          service_area   TEXT,
+          status         TEXT    NOT NULL DEFAULT 'active' CHECK (status IN
+                           ('draft','scheduled','active','on_hold','inactive','archived')),
+          effective_date TEXT,
+          notes          TEXT,
+          created_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+        )`);
+      const shared = ['id','name','day_of_week','status','notes','created_at'].filter(c => cols.includes(c));
+      db.exec(`INSERT INTO routes_new (${shared.join(',')}) SELECT ${shared.join(',')} FROM routes`);
+      db.exec(`UPDATE routes_new SET status='active' WHERE status NOT IN
+                 ('draft','scheduled','active','on_hold','inactive','archived')`);
+      db.exec('DROP TABLE routes');
+      db.exec('ALTER TABLE routes_new RENAME TO routes');
+      db.exec('COMMIT');
+      changes.push('routes: description, start/end time, service area, status widened');
+    } catch (err) { db.exec('ROLLBACK'); throw err; }
+    finally { db.exec('PRAGMA foreign_keys = ON'); }
+  }
+
+  /* --- communities: on_hold + archived --- */
+  const commDdl = one(`SELECT sql FROM sqlite_master WHERE type='table' AND name='communities'`)?.sql || '';
+  if (!commDdl.includes('archived')) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    try {
+      const cols = columns('communities');
+      db.exec(`
+        CREATE TABLE communities_new2 (
+          id        INTEGER PRIMARY KEY AUTOINCREMENT,
+          name      TEXT    NOT NULL,
+          kind      TEXT    NOT NULL DEFAULT 'apartment'
+                      CHECK (kind IN ('apartment','townhome','neighborhood','other')),
+          street    TEXT, city TEXT DEFAULT 'Columbus', state TEXT DEFAULT 'GA', zip TEXT,
+          contact_name TEXT, contact_email TEXT, contact_phone TEXT,
+          notes     TEXT,
+          status    TEXT    NOT NULL DEFAULT 'lead' CHECK (status IN
+                      ('lead','waiting_list','driver_needed','pending_setup',
+                       'scheduled','active','on_hold','paused','inactive','archived')),
+          waiting_reason      TEXT,
+          unit_count_estimate INTEGER,
+          potential_customers INTEGER,
+          tentative_start_date TEXT,
+          actual_start_date    TEXT,
+          service_start_time   TEXT,
+          service_instructions TEXT,
+          access_instructions  TEXT,
+          pricing_note         TEXT,
+          archived_at          TEXT,
+          created_at TEXT   NOT NULL DEFAULT (datetime('now'))
+        )`);
+      const shared = ['id','name','kind','street','city','state','zip','contact_name','contact_email',
+                      'contact_phone','notes','status','waiting_reason','unit_count_estimate',
+                      'potential_customers','tentative_start_date','actual_start_date','created_at']
+                      .filter(c => cols.includes(c));
+      db.exec(`INSERT INTO communities_new2 (${shared.join(',')}) SELECT ${shared.join(',')} FROM communities`);
+      db.exec('DROP TABLE communities');
+      db.exec('ALTER TABLE communities_new2 RENAME TO communities');
+      db.exec('COMMIT');
+      changes.push('communities: on_hold + archived, service/access instructions, start time');
+    } catch (err) { db.exec('ROLLBACK'); throw err; }
+    finally { db.exec('PRAGMA foreign_keys = ON'); }
+  }
+
+  /* --- pickup_schedules: effective dating, so changing service days
+         does not rewrite the schedule that applied last month --- */
+  if (addColumn('pickup_schedules', 'effective_date', "TEXT NOT NULL DEFAULT '2000-01-01'"))
+    changes.push('pickup_schedules.effective_date');
+  if (addColumn('pickup_schedules', 'end_date', 'TEXT'))
+    changes.push('pickup_schedules.end_date');
+
+  /* --- role_permissions: move from a bare role string to roles.key --- */
+  if (!columns('role_permissions').includes('role_key')) {
+    db.exec('BEGIN');
+    try {
+      db.exec(`CREATE TABLE role_permissions_new (
+                 role_key   TEXT NOT NULL,
+                 permission TEXT NOT NULL,
+                 allowed    INTEGER NOT NULL DEFAULT 1,
+                 PRIMARY KEY (role_key, permission))`);
+      db.exec(`INSERT OR IGNORE INTO role_permissions_new (role_key, permission, allowed)
+               SELECT role, permission, allowed FROM role_permissions`);
+      db.exec('DROP TABLE role_permissions');
+      db.exec('ALTER TABLE role_permissions_new RENAME TO role_permissions');
+      db.exec('COMMIT');
+      changes.push('role_permissions keyed by role');
+    } catch (err) { db.exec('ROLLBACK'); throw err; }
+  }
+
+  /* --- seed the granular defaults for the built-in roles --- */
+  const grant = (roleKey, perms) => {
+    let n = 0;
+    for (const p of perms) {
+      const r = db.prepare(`INSERT OR IGNORE INTO role_permissions (role_key, permission, allowed)
+                            VALUES (?, ?, 1)`).run(roleKey, p);
+      n += r.changes;
+    }
+    return n;
+  };
+
+  const MANAGER = [
+    'customers.view','customers.create','customers.edit','customers.billing.view',
+    'communities.view','communities.create','communities.edit','communities.schedule.edit',
+    'communities.driver.assign',
+    'routes.view','routes.create','routes.edit','routes.driver.assign','routes.crew.assign',
+    'routes.communities.edit','routes.schedule.edit',
+    'employees.view','time.view','time.edit',
+    'coupons.view','coupons.create','coupons.edit','coupons.disable','coupons.analytics.view',
+    'credits.issue','credits.approve','credits.reject','credits.reports.view',
+    'pickups.view','pickups.photos.view','pickups.issues.review',
+    'reports.view',
+  ];
+  const EMPLOYEE = ['pickups.view','pickups.photos.view','credits.issue'];
+
+  const m = grant('manager', MANAGER);
+  const e = grant('employee', EMPLOYEE);
+  if (m || e) changes.push(`${m + e} granular permission default(s) seeded`);
+
+  /* --- mirror users.role into user_roles (future multi-role support) --- */
+  const missing = all(`SELECT u.id, u.role FROM users u
+                        LEFT JOIN user_roles ur ON ur.user_id = u.id AND ur.role_key = u.role
+                       WHERE ur.user_id IS NULL`);
+  for (const u of missing) {
+    db.prepare(`INSERT OR IGNORE INTO user_roles (user_id, role_key, is_primary)
+                VALUES (?, ?, 1)`).run(u.id, u.role);
+  }
+  if (missing.length) changes.push(`${missing.length} user role link(s) created`);
+
+  /* --- an opening version for every existing route --- */
+  const noVersion = all(`SELECT r.* FROM routes r
+                          LEFT JOIN route_versions v ON v.route_id = r.id
+                         WHERE v.id IS NULL`);
+  for (const r of noVersion) {
+    const driver = one(`SELECT employee_id FROM route_assignments
+                         WHERE route_id = ? AND end_date IS NULL`, r.id);
+    db.prepare(`INSERT INTO route_versions
+                  (route_id, name, day_of_week, start_time, status, driver_employee_id,
+                   effective_date, change_note)
+                VALUES (?, ?, ?, ?, ?, ?, date(?), 'Initial configuration')`)
+      .run(r.id, r.name, r.day_of_week, r.start_time ?? null, r.status,
+           driver?.employee_id ?? null, r.created_at);
+  }
+  if (noVersion.length) changes.push(`${noVersion.length} initial route version(s) recorded`);
+
+  return changes;
+}
+
+
+/** Remove the fixed users.role CHECK — roles are rows now, not constants. */
+export function migrateDynamicRoles() {
+  const ddl = one(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`)?.sql || '';
+  if (!ddl.includes("CHECK (role IN")) return [];
+
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      CREATE TABLE users_dyn (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        email         TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        password_hash TEXT    NOT NULL,
+        -- No CHECK: valid roles live in the roles table and are validated
+        -- in application code, so custom roles are possible.
+        role          TEXT    NOT NULL,
+        first_name    TEXT    NOT NULL,
+        last_name     TEXT    NOT NULL,
+        phone         TEXT,
+        status        TEXT    NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active','suspended','deactivated')),
+        created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+        last_login_at TEXT,
+        must_change_password INTEGER NOT NULL DEFAULT 0,
+        locked_until  TEXT,
+        password_changed_at  TEXT
+      )`);
+    const cols = ['id','email','password_hash','role','first_name','last_name','phone','status',
+                  'created_at','last_login_at','must_change_password','locked_until',
+                  'password_changed_at'].filter(c => columns('users').includes(c));
+    db.exec(`INSERT INTO users_dyn (${cols.join(',')}) SELECT ${cols.join(',')} FROM users`);
+    db.exec('DROP TABLE users');
+    db.exec('ALTER TABLE users_dyn RENAME TO users');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_users_role ON users(role, status)');
+    db.exec('COMMIT');
+    return ['users.role CHECK removed (custom roles allowed)'];
+  } catch (err) { db.exec('ROLLBACK'); throw err; }
+  finally { db.exec('PRAGMA foreign_keys = ON'); }
 }

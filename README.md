@@ -856,6 +856,146 @@ $0–$5 quick-tap chips plus a free amount field, with the reason list and the $
 authority rule described under Coupons and service credits. A credit raised here
 is linked to the customer, employee, community, and route.
 
+## Admin control: archiving, route versioning, custom roles
+
+The governing rule: **current and future information is editable; history keeps
+the values that were true when the work happened.**
+
+### Nothing operational is deleted
+
+| State | Meaning |
+|---|---|
+| Active | Editable |
+| Inactive / On hold | Retained, not scheduling |
+| Archived | Retained for history, hidden from active views |
+| Deleted | Only for a record that was never used |
+
+Communities, routes, employees, customers, pickup records, photos, payments,
+credits, time entries, and audit logs are never hard-deleted.
+
+Archiving a community stops future scheduling and keeps everything else —
+verified: 12 units and 9 customer links survived, and `active` schedules were
+closed with an end date rather than removed.
+
+### Locked structural fields
+
+Once a property has operational history, renaming it is refused (**409**) —
+older records would start describing a property that no longer exists by that
+name. Operational fields (manager contact, start time, access instructions,
+service instructions, pricing notes, status) stay editable.
+
+### Route versioning — the history test
+
+Routes carry a configuration versioned by effective date. Changing a route today
+closes the old version and opens a new one; it never rewrites the old one.
+
+**Tested by doing it.** Route 1 had 5 pickups on Sept 15 driven by Marcus. I then
+reassigned the driver to James and changed the start time, effective Oct 1:
+
+```
+route_assignments
+  Marcus: 2026-08-13 → 2026-09-30
+  James:  2026-10-01 → present
+
+pickup_records for route 1 (after the change)
+  2026-09-15  Marcus   ← unchanged
+```
+
+September still says Marcus. The version history shows both configurations with
+who changed what, when, and why.
+
+The same pattern already protects pay rates (rate snapshot at clock-in), plan
+prices (locked price on the subscription), and service schedules (effective-dated
+`pickup_schedules`).
+
+### Custom roles
+
+**62 granular permissions across 12 categories**, edited as checkboxes. Admin
+always holds everything and cannot be modified. Built-in roles cannot be archived.
+
+Creating "Route Supervisor" with 11 boxes ticked produced exactly this:
+
+| Request | Result |
+|---|---|
+| `GET /api/roles/routes/all` | 200 |
+| `PATCH /api/roles/routes/1` | 200 |
+| `GET /api/people/employees` | 200 |
+| `GET /api/finance/summary` | **404** |
+| `GET /api/finance/payroll` | **404** |
+| `POST .../compensation` (change pay) | **404** |
+| `POST /api/roles` (create a role) | **404** |
+| `POST .../routes/2/archive` | **404** |
+
+**Enforcement is server-side.** Hiding a button is presentation; the API refuses
+the request regardless of what the page shows. `GET /api/roles/me/permissions`
+returns what the UI should render, derived from the same source the guard uses.
+
+`user_roles` exists so a user can hold several roles later; changing the primary
+role keeps it in step, so an old role's permissions do not silently survive.
+
+### Route management
+
+Create · Edit · Duplicate · Archive · Restore, with status
+`draft · scheduled · active · on_hold · inactive · archived`, start and estimated
+end times, service area, primary driver, additional crew, stop ordering, and
+effective dates on every change.
+
+## Cancel, Delete, and Archive
+
+Three distinct actions, and the system decides which is even offered:
+
+| Action | Meaning |
+|---|---|
+| **Cancel** | Abandon unsaved changes and restore the saved values |
+| **Delete** | Permanently remove a record that was *never used* |
+| **Archive** | Retire an established record, keeping all its history |
+
+### Cancel restores, it does not merely close
+
+`guardForm()` snapshots every field when a form opens. Cancel puts each field
+back and clears the dirty flag, so reopening never shows abandoned edits.
+
+Verified on a real route: start time `17:30` → edited to `16:00` → Cancel →
+back to `17:30`, and the database still read `17:30` — **nothing was saved.**
+
+### Unsaved-changes warning
+
+Editing without saving and then leaving prompts *"You have unsaved changes. Leave
+without saving?"* — on tab switches inside the dashboard and on closing the
+browser tab. Verified both ways: declining keeps you on the form, accepting
+navigates.
+
+### Delete is decided by the server, not the page
+
+`lib/deletable.js` inspects every relationship that would constitute history.
+The UI calls `GET .../deletable` to decide whether to render a Delete button —
+and the `DELETE` route runs the same check again, so a hand-crafted request
+cannot destroy history either.
+
+Tested on live data:
+
+| Record | Result |
+|---|---|
+| North Columbus Route | **refused** — 5 pickup records, 18 stops, 11 time entries, 2 assignments, 3 expenses |
+| Marcus (employee) | **refused** — 5 pickups, 23 time entries, 8 credits, 2 pay rates |
+| `DASHLAUNCH` coupon | **refused** — 9 redemptions, 2 waiting-list holds |
+| "Test Route 2" (draft) | **deleted** |
+| Duplicate community, no customers | **deleted** |
+| Employee who never worked | **deleted** |
+| Coupon never redeemed | **deleted** |
+
+A refusal names exactly what blocks it and suggests archiving instead.
+
+Built-in roles can never be deleted, and an admin cannot delete their own
+account. The **audit entry outlives the record**, so even a permitted deletion
+stays traceable.
+
+### Button layout
+
+Destructive actions are visually separated — Save and Cancel sit on the left of
+the action bar, Archive on the right, and permanent Delete in its own red
+"danger zone" panel below, which only appears when deletion is actually allowed.
+
 ## Deploying
 
 The site is static, so any host works. Since it's already on GitHub, the simplest

@@ -95,3 +95,131 @@ export function wireTabs(onChange) {
   show(buttons[0]?.dataset.tab);
   return show;
 }
+
+/* ============================================================
+   Form guarding: Cancel restores, and leaving warns.
+   ============================================================ */
+
+const guards = new Set();
+
+/**
+ * Watch a form area for unsaved changes.
+ *
+ *   const g = guardForm('#editCard', { onCancel: () => hide() });
+ *   g.snapshot()  — call after a successful save (this is now "clean")
+ *   g.isDirty()   — has anything changed since the snapshot?
+ *   g.restore()   — put every field back to the snapshot
+ *
+ * Cancel restores rather than merely closing, so reopening the form
+ * never shows the abandoned edits.
+ */
+export function guardForm(root, { onCancel } = {}) {
+  const el = typeof root === 'string' ? $(root) : root;
+  if (!el) return { snapshot() {}, isDirty: () => false, restore() {}, release() {} };
+
+  const fields = () => $$('input, select, textarea', el);
+  let saved = new Map();
+
+  const snapshot = () => {
+    saved = new Map();
+    for (const f of fields()) {
+      saved.set(f, f.type === 'checkbox' || f.type === 'radio' ? f.checked : f.value);
+    }
+  };
+
+  const isDirty = () => {
+    for (const f of fields()) {
+      if (!saved.has(f)) continue;
+      const now = f.type === 'checkbox' || f.type === 'radio' ? f.checked : f.value;
+      if (now !== saved.get(f)) return true;
+    }
+    return false;
+  };
+
+  const restore = () => {
+    for (const [f, v] of saved) {
+      if (!f.isConnected) continue;
+      if (f.type === 'checkbox' || f.type === 'radio') f.checked = v; else f.value = v;
+      f.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
+
+  const guard = { el, snapshot, isDirty, restore, release() { guards.delete(guard); } };
+  snapshot();
+  guards.add(guard);
+
+  // Wire any Cancel button inside this area.
+  $$('[data-cancel]', el).forEach(b => b.addEventListener('click', () => {
+    if (isDirty() && !confirm('Discard your unsaved changes?')) return;
+    restore();
+    snapshot();
+    onCancel?.();
+  }));
+
+  return guard;
+}
+
+/** True if any watched form has unsaved changes. */
+export const anyDirty = () => [...guards].some(g => g.el.isConnected && g.isDirty());
+
+/** Ask before an action that would throw away unsaved work. */
+export function confirmLeave(message = 'You have unsaved changes. Leave without saving?') {
+  return !anyDirty() || confirm(message);
+}
+
+// The browser's own guard for closing the tab or navigating away.
+window.addEventListener('beforeunload', (e) => {
+  if (!anyDirty()) return;
+  e.preventDefault();
+  e.returnValue = '';           // required for Chrome to show its prompt
+});
+
+/* ============================================================
+   Delete vs Archive — the server decides which is offered.
+   ============================================================ */
+
+/**
+ * Render a Delete button only when the server says the record has no
+ * history. Otherwise render nothing and let Archive stand alone.
+ */
+export async function renderDeleteControl(mountSelector, {
+  checkUrl, deleteUrl, label = 'record', onDeleted,
+}) {
+  const mount = typeof mountSelector === 'string' ? $(mountSelector) : mountSelector;
+  if (!mount) return;
+
+  let info;
+  try { info = await api(checkUrl); }
+  catch { mount.innerHTML = ''; return; }
+
+  if (!info.deletable) {
+    mount.innerHTML = `<p class="muted small delete-note">
+      Cannot be permanently deleted — ${esc(info.reason)} Archive it instead.</p>`;
+    return;
+  }
+
+  mount.innerHTML = `
+    <div class="danger-zone">
+      <strong>Permanently delete</strong>
+      <p class="small">${esc(info.reason)}</p>
+      <button class="btn btn-danger" data-do-delete>Delete permanently</button>
+    </div>`;
+
+  $('[data-do-delete]', mount).addEventListener('click', async () => {
+    const name = info.name || label;
+    if (!confirm(
+      `DELETE ${label.toUpperCase()}?\n\n${name}\n\n` +
+      `This record has never been used and will be permanently removed.\n` +
+      `This action cannot be undone.`
+    )) return;
+
+    try {
+      const res = await api(deleteUrl, { method: 'DELETE' });
+      alert(res.message || 'Deleted.');
+      onDeleted?.();
+    } catch (e) {
+      // The server re-checks, so this fires if history appeared in between.
+      alert(e.message + (e.suggestion ? `\n\n${e.suggestion}` : ''));
+    }
+  });
+}

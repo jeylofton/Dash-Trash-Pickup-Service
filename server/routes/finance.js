@@ -7,7 +7,7 @@
 
 import { Router } from 'express';
 import { one, all, run } from '../db/index.js';
-import { requireRole } from '../lib/rbac.js';
+import { requirePermission } from '../lib/permissions.js';
 import { audit } from '../lib/audit.js';
 import { storage, uploadProblem } from '../lib/storage.js';
 import {
@@ -21,7 +21,12 @@ import { currentPayPeriod, entryPayCents, MINUTES_SQL, rateOn } from '../lib/tim
 import { serviceDayStats, today } from '../lib/schedule.js';
 
 export const router = Router();
-router.use(requireRole('admin'));
+/* Financial data is permission-gated, not merely admin-gated, so a custom
+   role such as Bookkeeper can be given exactly what it needs. */
+router.use(requirePermission(
+  'financials.revenue.view', 'financials.profit.view', 'financials.expenses.view',
+  'financials.reports.view', 'payroll.labor.view', 'payroll.pay.view',
+));
 
 const range = (req) => resolveRange(req.query.range, req.query.from, req.query.to);
 const toMoney = (rows, key = 'cents') => rows.map(r => ({ ...r, amount: dollars(r[key] || 0) }));
@@ -157,7 +162,7 @@ router.get('/expenses', (req, res) => {
     .map(e => ({ ...e, amount: dollars(e.amount_cents) })));
 });
 
-router.post('/expenses', async (req, res) => {
+router.post('/expenses', requirePermission('financials.expenses.create'), async (req, res) => {
   const {
     categoryCode, description, amount, incurredOn, vendor,
     routeId, communityId, isRecurring, recurrence, notes, receipt,
@@ -201,7 +206,7 @@ router.post('/expenses', async (req, res) => {
   res.status(201).json({ id });
 });
 
-router.delete('/expenses/:id', (req, res) => {
+router.delete('/expenses/:id', requirePermission('financials.expenses.edit'), (req, res) => {
   const e = one('SELECT * FROM expenses WHERE id = ?', req.params.id);
   if (!e) return res.status(404).json({ error: 'Expense not found.' });
   run('DELETE FROM expenses WHERE id = ?', e.id);
@@ -214,7 +219,7 @@ router.delete('/expenses/:id', (req, res) => {
 
 /* ---------- Payroll ---------- */
 
-router.get('/payroll', (req, res) => {
+router.get('/payroll', requirePermission('payroll.pay.view'), (req, res) => {
   const period = req.query.from && req.query.to
     ? { start: req.query.from, end: req.query.to }
     : currentPayPeriod();
@@ -237,7 +242,7 @@ router.get('/payroll', (req, res) => {
 });
 
 /** CSV export for the pay period. */
-router.get('/payroll.csv', (req, res) => {
+router.get('/payroll.csv', requirePermission('payroll.pay.view','reports.export'), (req, res) => {
   const period = req.query.from && req.query.to
     ? { start: req.query.from, end: req.query.to }
     : currentPayPeriod();
@@ -276,7 +281,7 @@ router.get('/employees/:id/compensation', (req, res) => {
   });
 });
 
-router.post('/employees/:id/compensation', (req, res) => {
+router.post('/employees/:id/compensation', requirePermission('payroll.compensation.edit','employees.pay.rate'), (req, res) => {
   const { payType, rate, effectiveDate, note } = req.body || {};
   if (!['hourly', 'daily'].includes(payType)) {
     return res.status(400).json({ error: 'Pay type must be hourly or daily.' });
@@ -318,7 +323,7 @@ router.get('/timesheets', (req, res) => {
 });
 
 /** Correct a clock-in or clock-out. Always audited, reason required. */
-router.patch('/timesheets/:id', (req, res) => {
+router.patch('/timesheets/:id', requirePermission('time.edit'), (req, res) => {
   const entry = one('SELECT * FROM time_entries WHERE id = ?', req.params.id);
   if (!entry) return res.status(404).json({ error: 'Time entry not found.' });
 

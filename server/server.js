@@ -19,7 +19,7 @@ import { createCustomer, saveCard, createSubscription,
          verifyCredentials, SquareError, squareEnvironment } from './lib/payments/square.js';
 import { getIntroClaimed, reserveIntroSpot, releaseIntroSpot, recordSignup } from './store.js';
 import { migrate, one } from './db/index.js';
-import { migrateAdmin, migrateCommunities, migrateIssueCodes } from './db/migrate_admin.js';
+import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
 import { introCoupon } from './lib/coupons.js';
 import { attachUser, requirePasswordCurrent } from './lib/rbac.js';
 import { purgeExpiredSessions } from './lib/auth.js';
@@ -32,6 +32,7 @@ import { router as financeRouter }  from './routes/finance.js';
 import { router as peopleRouter }   from './routes/people.js';
 import { router as discountRouter } from './routes/discounts.js';
 import { router as communityRouter, publicCommunityRoutes } from './routes/communities.js';
+import { router as rolesRouter } from './routes/roles.js';
 import { attachDevReload } from './lib/devreload.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -277,6 +278,7 @@ app.use('/api/finance', financeRouter);   // admin-only, enforced inside the rou
 app.use('/api/people', peopleRouter);     // admin-only, enforced inside the router
 app.use('/api/promo', discountRouter);    // per-permission, enforced inside the router
 app.use('/api/communities', communityRouter);
+app.use('/api/roles', rolesRouter);       // roles, permissions, and route management
 publicCommunityRoutes(app);              // /api/service-check and /api/waitlist are public
 
 /* Gate the dashboard HTML itself. Without this a signed-out visitor could
@@ -401,7 +403,7 @@ app.use((err, req, res, next) => {
 /* ---------- Boot ---------- */
 
 migrate();
-const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes()];
+const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes(), ...migrateAdminControls(), ...migrateDynamicRoles()];
 if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
 purgeExpiredSessions();
 setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();

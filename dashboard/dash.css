@@ -274,3 +274,36 @@ label { font-size:.8rem; font-weight:800; display:block; margin-bottom:5px; }
 .credit-quick { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
 .credit-chip { flex:1 1 auto; min-width:52px; min-height:46px; font-weight:900; }
 .credit-chip.is-on { background:var(--orange); color:#fff; border-color:transparent; }
+
+/* permission checkbox grid */
+.perm-grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); }
+.perm-cat { border:1px solid var(--line); border-radius:12px; padding:13px 15px; background:#fdfcfa; }
+.perm-cat h4 {
+  margin:0 0 9px; font-size:.72rem; font-weight:900; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--muted);
+}
+.perm-row { display:flex; align-items:center; gap:9px; padding:4px 0; font-size:.87rem; }
+.perm-row input { width:17px; height:17px; flex:0 0 17px; accent-color:var(--orange); }
+.perm-cat-actions { display:flex; gap:8px; margin-top:8px; }
+.perm-cat-actions button {
+  background:none; border:0; color:var(--muted); font-size:.72rem; font-weight:800;
+  cursor:pointer; text-decoration:underline; padding:0;
+}
+.version-row { border-left:3px solid var(--line); padding:8px 0 8px 12px; margin-bottom:10px; }
+.version-row.current { border-left-color:var(--orange); }
+
+/* destructive actions kept visually apart from normal ones */
+.danger-zone {
+  border: 1px solid rgba(179,38,30,.35);
+  background: rgba(179,38,30,.05);
+  border-radius: 12px; padding: 14px 16px; margin-top: 16px;
+}
+.danger-zone strong { color: var(--bad); display: block; margin-bottom: 3px; }
+.danger-zone p { color: var(--muted); margin: 0 0 10px; }
+.delete-note { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.form-actions-bar {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line);
+}
+.form-actions-bar .spacer { flex: 1 1 auto; }
+.dirty-flag { color: var(--warn); font-size: .8rem; font-weight: 800; }

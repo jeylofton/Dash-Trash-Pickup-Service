@@ -22,6 +22,7 @@ export function migrate() {
   db.exec(readFileSync(join(HERE, 'schema_admin.sql'), 'utf8'));
   db.exec(readFileSync(join(HERE, 'schema_discounts.sql'), 'utf8'));
   db.exec(readFileSync(join(HERE, 'schema_communities.sql'), 'utf8'));
+  db.exec(readFileSync(join(HERE, 'schema_roles.sql'), 'utf8'));
 }
 
 /* Small helpers so route code reads cleanly. */

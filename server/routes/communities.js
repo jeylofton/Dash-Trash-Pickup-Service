@@ -12,13 +12,29 @@ import { requirePermission, setting } from '../lib/permissions.js';
 import { audit } from '../lib/audit.js';
 import { DAY_NAMES } from '../lib/schedule.js';
 import { dollars } from '../lib/finance.js';
+import { deletability, assertDeletable } from '../lib/deletable.js';
 
 export const router = Router();
 
 export const COMMUNITY_STATUS = [
   'lead', 'waiting_list', 'driver_needed', 'pending_setup',
-  'scheduled', 'active', 'paused', 'inactive',
+  'scheduled', 'active', 'on_hold', 'paused', 'inactive', 'archived',
 ];
+
+/* Structural fields are locked once a property has operational history:
+   renaming it or changing its unit count would make old records lie. */
+const LOCKED_ONCE_ESTABLISHED = ['name'];
+
+function hasHistory(communityId) {
+  const n = one(`
+    SELECT (SELECT COUNT(*) FROM units u
+              JOIN pickup_records pr ON pr.unit_id = u.id
+             WHERE u.community_id = ?) AS pickups,
+           (SELECT COUNT(*) FROM units u
+              JOIN service_addresses sa ON sa.unit_id = u.id
+             WHERE u.community_id = ?) AS customers`, communityId, communityId);
+  return (n.pickups + n.customers) > 0;
+}
 const SERVICING = 'active';
 
 const money = (c) => dollars(c || 0);
@@ -32,7 +48,7 @@ function potentialMonthly(community) {
 
 /* ---------- list ---------- */
 
-router.get('/', requirePermission('customers.view'), (req, res) => {
+router.get('/', requirePermission('customers.view','communities.view'), (req, res) => {
   const { status } = req.query;
   const rows = all(`
     SELECT c.*,
@@ -60,7 +76,7 @@ router.get('/', requirePermission('customers.view'), (req, res) => {
 });
 
 /** Everything an operations screen needs about one property. */
-router.get('/:id', requirePermission('customers.view'), (req, res) => {
+router.get('/:id', requirePermission('customers.view','communities.view'), (req, res) => {
   const community = one('SELECT * FROM communities WHERE id = ?', req.params.id);
   if (!community) return res.status(404).json({ error: 'Community not found.' });
 
@@ -97,7 +113,7 @@ router.get('/:id', requirePermission('customers.view'), (req, res) => {
 
 /* ---------- create (never activates) ---------- */
 
-router.post('/', requirePermission('customers.manage'), (req, res) => {
+router.post('/', requirePermission('customers.edit','communities.edit'), (req, res) => {
   const b = req.body || {};
   if (!b.name) return res.status(400).json({ error: 'Community name is required.' });
   if (b.status && !COMMUNITY_STATUS.includes(b.status)) {
@@ -135,7 +151,7 @@ router.post('/', requirePermission('customers.manage'), (req, res) => {
   res.status(201).json({ id, status, message: 'Community created. It is not servicing yet.' });
 });
 
-router.patch('/:id', requirePermission('customers.manage'), (req, res) => {
+router.patch('/:id', requirePermission('customers.edit','communities.edit'), (req, res) => {
   const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Community not found.' });
   const b = req.body || {};
@@ -151,6 +167,18 @@ router.patch('/:id', requirePermission('customers.manage'), (req, res) => {
     return res.status(400).json({ error: 'Unknown status.' });
   }
 
+  // Structural fields are locked once the property has real history.
+  if (hasHistory(c.id)) {
+    const attempted = LOCKED_ONCE_ESTABLISHED.filter(f => b[f] !== undefined && b[f] !== c[f]);
+    if (attempted.length) {
+      return res.status(409).json({
+        error: `This community has operational history, so ${attempted.join(', ')} cannot be changed here.`,
+        locked: attempted,
+        hint: 'Renaming an established property would make older records inaccurate. Use a privileged correction if it is genuinely wrong.',
+      });
+    }
+  }
+
   run(`UPDATE communities SET
          name = COALESCE(?, name), kind = COALESCE(?, kind),
          street = COALESCE(?, street), city = COALESCE(?, city),
@@ -161,12 +189,19 @@ router.patch('/:id', requirePermission('customers.manage'), (req, res) => {
          unit_count_estimate = COALESCE(?, unit_count_estimate),
          potential_customers = COALESCE(?, potential_customers),
          tentative_start_date = COALESCE(?, tentative_start_date),
+         actual_start_date = COALESCE(?, actual_start_date),
+         service_start_time = COALESCE(?, service_start_time),
+         service_instructions = COALESCE(?, service_instructions),
+         access_instructions = COALESCE(?, access_instructions),
+         pricing_note = COALESCE(?, pricing_note),
          notes = COALESCE(?, notes)
        WHERE id = ?`,
       b.name ?? null, b.kind ?? null, b.street ?? null, b.city ?? null, b.state ?? null,
       b.zip ?? null, b.contactName ?? null, b.contactPhone ?? null, b.contactEmail ?? null,
       b.status ?? null, b.waitingReason ?? null, b.unitCountEstimate ?? null,
-      b.potentialCustomers ?? null, b.tentativeStartDate ?? null, b.notes ?? null, c.id);
+      b.potentialCustomers ?? null, b.tentativeStartDate ?? null, b.actualStartDate ?? null,
+      b.serviceStartTime ?? null, b.serviceInstructions ?? null, b.accessInstructions ?? null,
+      b.pricingNote ?? null, b.notes ?? null, c.id);
 
   if (b.status && b.status !== c.status) {
     run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
@@ -179,6 +214,119 @@ router.patch('/:id', requirePermission('customers.manage'), (req, res) => {
               ? { from: c.status, to: b.status } : undefined },
   });
   res.json({ ok: true });
+});
+
+/* ---------- hold / archive / restore ---------- */
+
+router.post('/:id/hold', requirePermission('communities.edit'), (req, res) => {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+  if (c.status === 'archived') return res.status(400).json({ error: 'That community is archived.' });
+
+  tx(() => {
+    run(`UPDATE communities SET status='on_hold', waiting_reason = ? WHERE id = ?`,
+        req.body?.reason ?? 'On hold', c.id);
+    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
+         VALUES (?, ?, 'on_hold', ?, ?)`, c.id, c.status, req.user.id, req.body?.reason ?? null);
+  });
+  audit(req, 'community.on_hold', { entityType: 'community', entityId: c.id,
+                                    detail: { name: c.name, from: c.status, reason: req.body?.reason ?? null } });
+  res.json({ ok: true, message: 'Service paused. Existing records are unchanged.' });
+});
+
+router.post('/:id/reactivate', requirePermission('communities.edit'), (req, res) => {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+  if (!['on_hold', 'paused', 'inactive'].includes(c.status)) {
+    return res.status(400).json({ error: `Cannot reactivate from "${c.status}".` });
+  }
+  tx(() => {
+    run(`UPDATE communities SET status='active', waiting_reason = NULL WHERE id = ?`, c.id);
+    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
+         VALUES (?, ?, 'active', ?, 'Reactivated')`, c.id, c.status, req.user.id);
+  });
+  audit(req, 'community.reactivated', { entityType: 'community', entityId: c.id,
+                                        detail: { name: c.name, from: c.status } });
+  res.json({ ok: true });
+});
+
+/** Archive, never delete. Everything historical stays queryable. */
+router.post('/:id/archive', requirePermission('communities.archive'), (req, res) => {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+  if (c.status === 'archived') return res.status(400).json({ error: 'Already archived.' });
+
+  const counts = one(`
+    SELECT (SELECT COUNT(*) FROM units WHERE community_id = ?) AS units,
+           (SELECT COUNT(*) FROM units u JOIN pickup_records pr ON pr.unit_id = u.id
+             WHERE u.community_id = ?) AS pickups,
+           (SELECT COUNT(*) FROM units u JOIN service_addresses sa ON sa.unit_id = u.id
+             WHERE u.community_id = ?) AS customers`, c.id, c.id, c.id);
+
+  tx(() => {
+    run(`UPDATE communities SET status='archived', archived_at = datetime('now') WHERE id = ?`, c.id);
+    // Stop future scheduling without touching what already happened.
+    run(`UPDATE pickup_schedules SET active = 0, end_date = date('now')
+          WHERE community_id = ? AND active = 1`, c.id);
+    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
+         VALUES (?, ?, 'archived', ?, ?)`, c.id, c.status, req.user.id, req.body?.note ?? null);
+  });
+
+  audit(req, 'community.archived', {
+    entityType: 'community', entityId: c.id,
+    detail: { name: c.name, from: c.status, preserved: counts },
+  });
+  res.json({
+    ok: true, preserved: counts,
+    message: `Archived. ${counts.pickups} pickup record(s) and ${counts.customers} customer link(s) remain in history.`,
+  });
+});
+
+router.post('/:id/restore', requirePermission('communities.archive'), (req, res) => {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+  if (c.status !== 'archived') return res.status(400).json({ error: 'That community is not archived.' });
+  tx(() => {
+    run(`UPDATE communities SET status='inactive', archived_at = NULL WHERE id = ?`, c.id);
+    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
+         VALUES (?, 'archived', 'inactive', ?, 'Restored from archive')`, c.id, req.user.id);
+  });
+  audit(req, 'community.restored', { entityType: 'community', entityId: c.id, detail: { name: c.name } });
+  res.json({ ok: true, status: 'inactive' });
+});
+
+/**
+ * Change service days with an effective date. The old schedule is closed
+ * off rather than deleted, so a service record from before the change
+ * still reflects the days that actually applied then.
+ */
+router.put('/:id/schedule', requirePermission('communities.schedule.edit'), (req, res) => {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+  const { days, effectiveDate } = req.body || {};
+  if (!Array.isArray(days)) return res.status(400).json({ error: 'days must be an array of 0-6.' });
+  const effective = effectiveDate || today();
+
+  const before = all(`SELECT day_of_week FROM pickup_schedules
+                       WHERE community_id = ? AND active = 1`, c.id).map(r => r.day_of_week);
+
+  tx(() => {
+    run(`UPDATE pickup_schedules SET active = 0, end_date = date(?, '-1 day')
+          WHERE community_id = ? AND active = 1`, effective, c.id);
+    for (const d of days) {
+      run(`INSERT INTO pickup_schedules (community_id, day_of_week, active, effective_date)
+           VALUES (?, ?, 1, ?)`, c.id, Number(d), effective);
+    }
+  });
+
+  audit(req, 'community.schedule_changed', {
+    entityType: 'community', entityId: c.id,
+    detail: { name: c.name,
+              from: before.map(d => DAY_NAMES[d]), to: days.map(d => DAY_NAMES[Number(d)]),
+              effectiveDate: effective },
+  });
+  res.json({ ok: true, effectiveDate: effective,
+             message: `New schedule applies from ${effective}. Earlier records are unchanged.` });
 });
 
 /* ---------- readiness + activation ---------- */
@@ -202,14 +350,14 @@ function readiness(communityId) {
   return { checks, ready: checks.every(c => c.ok) };
 }
 
-router.get('/:id/readiness', requirePermission('customers.view'), (req, res) => {
+router.get('/:id/readiness', requirePermission('customers.view','communities.view'), (req, res) => {
   const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Community not found.' });
   res.json({ community: { id: c.id, name: c.name, status: c.status }, ...readiness(c.id) });
 });
 
 /** Activation is deliberate and checked — never a side effect of an edit. */
-router.post('/:id/activate', requirePermission('customers.manage'), (req, res) => {
+router.post('/:id/activate', requirePermission('customers.edit','communities.edit'), (req, res) => {
   const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Community not found.' });
   if (c.status === 'active') return res.status(400).json({ error: 'That community is already active.' });
@@ -251,7 +399,7 @@ router.post('/:id/activate', requirePermission('customers.manage'), (req, res) =
 
 /* ---------- driver-needed board ---------- */
 
-router.get('/board/driver-needed', requirePermission('customers.view'), (req, res) => {
+router.get('/board/driver-needed', requirePermission('customers.view','communities.view'), (req, res) => {
   const rows = all(`
     SELECT c.*,
            (SELECT COUNT(*) FROM community_waitlist w
@@ -272,13 +420,13 @@ router.get('/board/driver-needed', requirePermission('customers.view'), (req, re
 
 /* ---------- waiting list ---------- */
 
-router.get('/:id/waitlist', requirePermission('customers.view'), (req, res) => {
+router.get('/:id/waitlist', requirePermission('customers.view','communities.view'), (req, res) => {
   res.json(all(`SELECT w.*, c.code AS coupon_code FROM community_waitlist w
                   LEFT JOIN coupons c ON c.id = w.coupon_id
                  WHERE w.community_id = ? ORDER BY w.created_at DESC`, req.params.id));
 });
 
-router.patch('/waitlist/:entryId', requirePermission('customers.manage'), (req, res) => {
+router.patch('/waitlist/:entryId', requirePermission('customers.edit','communities.edit'), (req, res) => {
   const entry = one('SELECT * FROM community_waitlist WHERE id = ?', req.params.entryId);
   if (!entry) return res.status(404).json({ error: 'Waiting-list entry not found.' });
   const { status, notes } = req.body || {};
@@ -294,6 +442,41 @@ router.patch('/waitlist/:entryId', requirePermission('customers.manage'), (req, 
   res.json({ ok: true });
 });
 
+
+/* ---------- permanent deletion ---------- */
+
+router.get('/:id/deletable', requirePermission('communities.view','customers.view'), (req, res) => {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+  res.json({ ...deletability('community', c.id, c), name: c.name, status: c.status });
+});
+
+router.delete('/:id', requirePermission('communities.archive'), (req, res) => {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+
+  try {
+    assertDeletable('community', c.id, c);
+  } catch (err) {
+    return res.status(err.status).json({
+      error: err.message, code: err.code, blockers: err.blockers, suggestion: err.suggestion,
+    });
+  }
+
+  tx(() => {
+    run('DELETE FROM pickup_schedules WHERE community_id = ?', c.id);
+    run('DELETE FROM community_status_history WHERE community_id = ?', c.id);
+    run('DELETE FROM units WHERE community_id = ?', c.id);       // none are in use, by the check above
+    run('DELETE FROM buildings WHERE community_id = ?', c.id);
+    run('DELETE FROM communities WHERE id = ?', c.id);
+  });
+
+  audit(req, 'community.deleted', {
+    entityType: 'community', entityId: c.id,
+    detail: { name: c.name, status: c.status, note: 'permanently deleted — no history existed' },
+  });
+  res.json({ ok: true, message: `"${c.name}" was permanently deleted.` });
+});
 
 /* ============================================================
    Public: is my community serviced, and can I join the list?

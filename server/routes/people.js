@@ -13,18 +13,22 @@
 import { Router } from 'express';
 import { randomBytes } from 'node:crypto';
 import { one, all, run, tx } from '../db/index.js';
-import { requireRole } from '../lib/rbac.js';
+import { requirePermission } from '../lib/permissions.js';
 import { audit } from '../lib/audit.js';
 import { hashPassword, passwordProblem, destroyAllSessions } from '../lib/auth.js';
 import { rateOn, currentPayPeriod, entryPayCents, MINUTES_SQL } from '../lib/timeclock.js';
 import { laborByEmployee, dollars } from '../lib/finance.js';
 import { today, DAY_NAMES } from '../lib/schedule.js';
+import { deletability, assertDeletable } from '../lib/deletable.js';
 
 export const router = Router();
-router.use(requireRole('admin'));
+router.use(requirePermission('employees.view','system.users.manage'));
 
 const EMP_STATUS = ['active', 'inactive', 'on_leave', 'terminated', 'archived'];
-const ROLES = ['admin', 'manager', 'employee', 'customer'];
+/* Roles are data now, so a hardcoded list would go stale the moment an
+   admin creates a custom one. Validate against the table instead. */
+const isValidRole = (key) =>
+  Boolean(one(`SELECT 1 FROM roles WHERE key = ? AND status = 'active'`, key));
 
 /** Record only what changed, so the audit entry is readable. */
 function diff(before, after) {
@@ -140,7 +144,7 @@ router.get('/employees/:id', (req, res) => {
 });
 
 /** Create an employee: user account + employee row + profile, in one transaction. */
-router.post('/employees', async (req, res) => {
+router.post('/employees', requirePermission('employees.create'), async (req, res) => {
   const b = req.body || {};
   if (!b.firstName || !b.lastName || !b.email) {
     return res.status(400).json({ error: 'First name, last name, and email are required.' });
@@ -198,7 +202,7 @@ router.post('/employees', async (req, res) => {
 });
 
 /** Edit an employee: user fields, employee fields, and profile in one call. */
-router.patch('/employees/:id', (req, res) => {
+router.patch('/employees/:id', requirePermission('employees.edit'), (req, res) => {
   const emp = one(`SELECT e.*, u.first_name, u.last_name, u.email, u.phone, u.status AS account_status
                      FROM employees e JOIN users u ON u.id = e.user_id WHERE e.id = ?`, req.params.id);
   if (!emp) return res.status(404).json({ error: 'Employee not found.' });
@@ -289,7 +293,7 @@ router.post('/employees/:id/notes', (req, res) => {
    Accounts + passwords
    ============================================================ */
 
-router.get('/accounts', (req, res) => {
+router.get('/accounts', requirePermission('system.users.manage'), (req, res) => {
   const { role, status, q } = req.query;
   const where = [], params = [];
   if (role)   { where.push('u.role = ?'); params.push(role); }
@@ -310,7 +314,7 @@ router.get('/accounts', (req, res) => {
 });
 
 /** Issue a temporary password. Returned once; the employee must change it. */
-router.post('/accounts/:userId/temporary-password', async (req, res) => {
+router.post('/accounts/:userId/temporary-password', requirePermission('system.passwords.reset','employees.password.reset'), async (req, res) => {
   const user = one('SELECT * FROM users WHERE id = ?', req.params.userId);
   if (!user) return res.status(404).json({ error: 'User not found.' });
 
@@ -332,7 +336,7 @@ router.post('/accounts/:userId/temporary-password', async (req, res) => {
   });
 });
 
-router.post('/accounts/:userId/force-password-change', (req, res) => {
+router.post('/accounts/:userId/force-password-change', requirePermission('system.passwords.reset'), (req, res) => {
   const user = one('SELECT * FROM users WHERE id = ?', req.params.userId);
   if (!user) return res.status(404).json({ error: 'User not found.' });
   run('UPDATE users SET must_change_password = 1 WHERE id = ?', user.id);
@@ -342,7 +346,7 @@ router.post('/accounts/:userId/force-password-change', (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/accounts/:userId/lock', (req, res) => {
+router.post('/accounts/:userId/lock', requirePermission('system.users.manage'), (req, res) => {
   const user = one('SELECT * FROM users WHERE id = ?', req.params.userId);
   if (!user) return res.status(404).json({ error: 'User not found.' });
   if (user.id === req.user.id) return res.status(400).json({ error: 'You cannot lock your own account.' });
@@ -355,7 +359,7 @@ router.post('/accounts/:userId/lock', (req, res) => {
   res.json({ ok: true });
 });
 
-router.post('/accounts/:userId/unlock', (req, res) => {
+router.post('/accounts/:userId/unlock', requirePermission('system.users.manage'), (req, res) => {
   const user = one('SELECT * FROM users WHERE id = ?', req.params.userId);
   if (!user) return res.status(404).json({ error: 'User not found.' });
   run('UPDATE users SET locked_until = NULL WHERE id = ?', user.id);
@@ -364,7 +368,7 @@ router.post('/accounts/:userId/unlock', (req, res) => {
   res.json({ ok: true });
 });
 
-router.patch('/accounts/:userId', (req, res) => {
+router.patch('/accounts/:userId', requirePermission('system.users.manage'), (req, res) => {
   const user = one('SELECT * FROM users WHERE id = ?', req.params.userId);
   if (!user) return res.status(404).json({ error: 'User not found.' });
   const b = req.body || {};
@@ -379,7 +383,7 @@ router.patch('/accounts/:userId', (req, res) => {
         confirmPhrase: 'CHANGE ROLE',
       });
     }
-    if (!ROLES.includes(b.role)) return res.status(400).json({ error: 'Unknown role.' });
+    if (!isValidRole(b.role)) return res.status(400).json({ error: 'Unknown or inactive role.' });
     if (user.id === req.user.id) return res.status(400).json({ error: 'You cannot change your own role.' });
   }
 
@@ -398,6 +402,16 @@ router.patch('/accounts/:userId', (req, res) => {
       b.email ?? null, b.status ?? null, b.role ?? null,
       b.firstName ?? null, b.lastName ?? null, b.phone ?? null, user.id);
 
+  /* Keep user_roles in step with the primary role. Without this the old
+     role link survives, and the user silently keeps permissions from a
+     role the admin believed they had replaced. */
+  if (changes.role) {
+    run(`DELETE FROM user_roles WHERE user_id = ? AND role_key = ?`, user.id, user.role);
+    run(`INSERT OR IGNORE INTO user_roles (user_id, role_key, is_primary, assigned_by)
+         VALUES (?, ?, 1, ?)`, user.id, b.role, req.user.id);
+    run(`UPDATE user_roles SET is_primary = (role_key = ?) WHERE user_id = ?`, b.role, user.id);
+  }
+
   if (changes.role || changes.status) destroyAllSessions(user.id);
 
   audit(req, changes.role ? 'account.role_changed' : 'account.updated', {
@@ -408,7 +422,7 @@ router.patch('/accounts/:userId', (req, res) => {
 
 /* ---------- Audit log with readable before/after ---------- */
 
-router.get('/audit', (req, res) => {
+router.get('/audit', requirePermission('system.audit.view'), (req, res) => {
   const { action, entityType, limit = 200 } = req.query;
   const where = [], params = [];
   if (action) { where.push('a.action LIKE ?'); params.push(`%${action}%`); }
@@ -420,4 +434,47 @@ router.get('/audit', (req, res) => {
       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
      ORDER BY a.created_at DESC LIMIT ?`, ...params, Number(limit))
     .map(a => ({ ...a, detail: a.detail ? JSON.parse(a.detail) : null })));
+});
+
+
+/* ---------- permanent deletion ---------- */
+
+router.get('/employees/:id/deletable', requirePermission('employees.view'), (req, res) => {
+  const e = one(`SELECT e.*, u.first_name, u.last_name FROM employees e
+                   JOIN users u ON u.id = e.user_id WHERE e.id = ?`, req.params.id);
+  if (!e) return res.status(404).json({ error: 'Employee not found.' });
+  res.json({ ...deletability('employee', e.id, e),
+             name: `${e.first_name} ${e.last_name}`, status: e.status });
+});
+
+router.delete('/employees/:id', requirePermission('employees.archive'), (req, res) => {
+  const e = one(`SELECT e.*, u.id AS user_id, u.first_name, u.last_name, u.email
+                   FROM employees e JOIN users u ON u.id = e.user_id WHERE e.id = ?`, req.params.id);
+  if (!e) return res.status(404).json({ error: 'Employee not found.' });
+  if (e.user_id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account.' });
+
+  try {
+    assertDeletable('employee', e.id, e);
+  } catch (err) {
+    return res.status(err.status).json({
+      error: err.message, code: err.code, blockers: err.blockers, suggestion: err.suggestion,
+    });
+  }
+
+  tx(() => {
+    run('DELETE FROM employee_profiles WHERE employee_id = ?', e.id);
+    run('DELETE FROM employee_notes WHERE employee_id = ?', e.id);
+    run('DELETE FROM employees WHERE id = ?', e.id);
+    run('DELETE FROM user_roles WHERE user_id = ?', e.user_id);
+    run('DELETE FROM sessions WHERE user_id = ?', e.user_id);
+    run('DELETE FROM password_reset_events WHERE user_id = ?', e.user_id);
+    run('DELETE FROM users WHERE id = ?', e.user_id);
+  });
+
+  audit(req, 'employee.deleted', {
+    entityType: 'employee', entityId: e.id,
+    detail: { name: `${e.first_name} ${e.last_name}`, email: e.email,
+              note: 'permanently deleted — never worked a shift' },
+  });
+  res.json({ ok: true, message: `${e.first_name} ${e.last_name} was permanently deleted.` });
 });

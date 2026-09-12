@@ -27,6 +27,7 @@
     <button data-tab="routes">Routes</button>
     <button data-tab="employees">Employees</button>
     <button data-tab="accounts">Accounts</button>
+    <button data-tab="roles">Roles</button>
     <button data-tab="pickups">Pickups</button>
     <button data-tab="payments">Payments</button>
     <button data-tab="financials">Financials</button>
@@ -118,9 +119,60 @@
     </section>
 
     <section data-panel="routes" hidden>
-      <h1>Routes</h1>
+      <h1>Route Management</h1>
+      <div class="toolbar">
+        <div><label for="routeStatusFilter">Status</label>
+          <select id="routeStatusFilter"><option value="">Active &amp; current</option>
+            <option>draft</option><option>scheduled</option><option>active</option>
+            <option>on_hold</option><option>inactive</option><option>archived</option></select></div>
+        <div style="flex:0 0 auto"><button class="btn btn-primary" id="newRouteBtn">+ New route</button></div>
+      </div>
+      <div class="card" id="newRouteCard" hidden>
+        <h2>New route</h2>
+        <div class="row">
+          <div><label>Name</label><input id="nrName" placeholder="North Columbus Route" /></div>
+          <div><label>Service day</label><select id="nrDay"></select></div>
+          <div><label>Start time</label><input id="nrStart" type="time" /></div>
+          <div><label>Est. end time</label><input id="nrEnd" type="time" /></div>
+        </div>
+        <div class="row">
+          <div><label>Driver</label><select id="nrDriver"><option value="">Unassigned</option></select></div>
+          <div><label>Service area</label><input id="nrArea" placeholder="North Columbus" /></div>
+          <div><label>Status</label><select id="nrStatus">
+            <option value="draft">Draft</option><option value="scheduled">Scheduled</option>
+            <option value="active">Active</option></select></div>
+          <div><label>Effective date</label><input id="nrEffective" type="date" /></div>
+        </div>
+        <div class="row"><div><label>Description</label><input id="nrDesc" /></div></div>
+        <p class="msg" id="nrMsg" hidden></p>
+        <button class="btn btn-primary" id="nrSave">Create route</button>
+        <button class="btn" id="nrCancel">Cancel</button>
+      </div>
       <div class="card"><div class="table-wrap"><table id="routeTable"></table></div></div>
       <div class="card" id="routeDetail" hidden></div>
+    </section>
+
+    <section data-panel="roles" hidden>
+      <h1>Roles &amp; Permissions</h1>
+      <p class="muted small" style="margin-top:-8px">Permissions are enforced on the server.
+        Unticking a box does not just hide a button — the API refuses the request too.</p>
+      <div class="toolbar">
+        <div style="flex:0 0 auto"><button class="btn btn-primary" id="newRoleBtn">+ New role</button></div>
+      </div>
+      <div class="card" id="newRoleCard" hidden>
+        <h2>New role</h2>
+        <div class="row">
+          <div><label>Role name</label><input id="nrlName" placeholder="Route Supervisor" /></div>
+          <div><label>Key</label><input id="nrlKey" placeholder="route_supervisor" /></div>
+          <div><label>Copy permissions from</label><select id="nrlCopy"><option value="">Start empty</option></select></div>
+        </div>
+        <div class="row"><div><label>Description</label><input id="nrlDesc" /></div></div>
+        <p class="msg" id="nrlMsg" hidden></p>
+        <button class="btn btn-primary" id="nrlSave">Create role</button>
+        <button class="btn" id="nrlCancel">Cancel</button>
+      </div>
+      <div class="card"><div class="table-wrap"><table id="roleTable"></table></div></div>
+      <div class="card" id="roleDetail" hidden></div>
     </section>
 
     <section data-panel="employees" hidden>
