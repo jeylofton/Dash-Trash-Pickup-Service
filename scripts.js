@@ -69,7 +69,7 @@
       // one port and the API on another, so localhost is redirected below.
       baseUrl: '',
       localDevUrl: 'http://localhost:3000',
-      enabled: true,         // false = force demo mode
+      enabled: true,  // Set to false for offline testing when the API server is unavailable
     },
 
     /* ---- Service area (used by the availability step) ---- */
