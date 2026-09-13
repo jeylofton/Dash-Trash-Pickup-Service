@@ -18,17 +18,18 @@ router.get('/overview', (req, res) => {
   generateServiceDay(date);                // make sure today's list exists
   const day = serviceDayStats(date);
 
-  const activeCustomers = one(`SELECT COUNT(*) AS n FROM customers WHERE status='active'`).n;
+  const activeCustomers = one(`SELECT COUNT(*) AS n FROM customers WHERE status='active' AND is_demo=0`).n;
   const introActive = one(
     `SELECT COUNT(*) AS n FROM customers c
        JOIN subscriptions s ON s.customer_id = c.id AND s.status IN ('active','past_due')
-      WHERE c.is_intro = 1 AND c.status = 'active'`).n;
+      WHERE c.is_intro = 1 AND c.status = 'active' AND c.is_demo=0`).n;
   const employeesAssigned = one(
     `SELECT COUNT(DISTINCT ra.employee_id) AS n
        FROM route_assignments ra
        JOIN routes r ON r.id = ra.route_id
       WHERE r.day_of_week = ? AND ra.effective_date <= ?
-        AND (ra.end_date IS NULL OR ra.end_date >= ?)`,
+        AND (ra.end_date IS NULL OR ra.end_date >= ?)
+        AND ra.is_demo=0`,
     new Date(`${date}T12:00:00`).getDay(), date, date).n;
 
   const pay = one(`
@@ -37,7 +38,7 @@ router.get('/overview', (req, res) => {
       SUM(CASE WHEN status='pending'  THEN 1 ELSE 0 END) AS pending,
       SUM(CASE WHEN status='past_due' THEN 1 ELSE 0 END) AS past_due,
       SUM(CASE WHEN status='failed'   THEN 1 ELSE 0 END) AS failed
-    FROM payments`);
+    FROM payments WHERE is_demo=0`);
 
   // A promotional subscription still on its 12-month term bills at
   // promo_price_cents, not locked_price_cents - counting the standard rate
@@ -47,13 +48,13 @@ router.get('/overview', (req, res) => {
       CAST(CASE WHEN s.promo_periods_remaining > 0 THEN s.promo_price_cents ELSE s.locked_price_cents END AS REAL)
       / p.interval_months), 0) AS c
       FROM subscriptions s JOIN plans p ON p.id = s.plan_id
-     WHERE s.status = 'active'`).c;
+     WHERE s.status = 'active' AND s.is_demo=0`).c;
 
   /* Operations picture, not just today's numbers. */
   const photosToday = one(
     `SELECT COUNT(*) AS n FROM pickup_photos ph
        JOIN pickup_records pr ON pr.id = ph.pickup_record_id
-      WHERE pr.service_date = ?`, date).n;
+      WHERE pr.service_date = ? AND pr.is_demo=0`, date).n;
 
   const credits = one(`
     SELECT COALESCE(SUM(CASE WHEN status IN ('auto_approved','approved','modified','applied')
@@ -61,19 +62,19 @@ router.get('/overview', (req, res) => {
            COUNT(CASE WHEN status='pending' THEN 1 END) AS pending_count,
            COALESCE(SUM(CASE WHEN status='pending' THEN requested_cents END),0) AS pending_cents
       FROM service_credits
-     WHERE strftime('%Y-%m', requested_at) = strftime('%Y-%m','now')`);
+     WHERE strftime('%Y-%m', requested_at) = strftime('%Y-%m','now') AND is_demo=0`);
 
   const communities = one(`
     SELECT COUNT(CASE WHEN status='active' THEN 1 END) AS active,
            COUNT(CASE WHEN status IN ('waiting_list','lead') THEN 1 END) AS waiting,
            COUNT(CASE WHEN status='driver_needed' THEN 1 END) AS driver_needed,
            COUNT(CASE WHEN status='scheduled' THEN 1 END) AS scheduled
-      FROM communities`);
+      FROM communities WHERE is_demo=0`);
 
   const upcoming = all(`
     SELECT id, name, status, tentative_start_date, unit_count_estimate
       FROM communities
-     WHERE status != 'active' AND tentative_start_date IS NOT NULL
+     WHERE status != 'active' AND tentative_start_date IS NOT NULL AND is_demo=0
      ORDER BY tentative_start_date LIMIT 6`);
 
   const introCoupon = one(`SELECT * FROM coupons WHERE is_intro = 1 AND disabled = 0
@@ -135,6 +136,7 @@ router.get('/customers', (req, res) => {
   if (status)  { where.push('c.status = ?'); params.push(status); }
   if (plan)    { where.push('p.code = ?'); params.push(plan); }
   if (payment) { where.push('sub.status = ?'); params.push(payment); }
+  where.push('c.is_demo = 0');   // training customers never appear in the owner's list
 
   const sql = `
     SELECT c.id, c.status, c.is_intro,
@@ -314,7 +316,8 @@ router.get('/employees', (req, res) => {
     SELECT e.*, u.first_name, u.last_name, u.email, u.phone, u.status AS user_status, u.last_login_at,
            (SELECT COUNT(*) FROM route_assignments ra
              WHERE ra.employee_id = e.id AND ra.end_date IS NULL) AS active_routes
-      FROM employees e JOIN users u ON u.id = e.user_id ORDER BY u.last_name`));
+      FROM employees e JOIN users u ON u.id = e.user_id
+     WHERE e.is_demo = 0 ORDER BY u.last_name`));
 });
 
 router.post('/employees', async (req, res) => {
@@ -370,6 +373,7 @@ router.get('/routes', (req, res) => {
       LEFT JOIN route_assignments ra ON ra.route_id = r.id AND ra.end_date IS NULL
       LEFT JOIN employees e ON e.id = ra.employee_id
       LEFT JOIN users u ON u.id = e.user_id
+     WHERE r.is_demo = 0
      ORDER BY r.day_of_week, r.name`)
     .map(r => ({ ...r, dayName: DAY_NAMES[r.day_of_week] })));
 });
@@ -468,7 +472,7 @@ router.get('/pickups', (req, res) => {
         LEFT JOIN pickup_records pr ON pr.service_stop_id = ss.id
         LEFT JOIN employees e ON e.id = pr.employee_id
         LEFT JOIN users eu ON eu.id = e.user_id
-       WHERE ss.service_date = ?
+       WHERE ss.service_date = ? AND ss.is_demo = 0
        ORDER BY com.name, un.label`, date),
   });
 });
@@ -485,7 +489,7 @@ router.get('/pickups/issues', (req, res) => {
       LEFT JOIN users cu ON cu.id = c.user_id
       LEFT JOIN employees e ON e.id = pr.employee_id
       LEFT JOIN users eu ON eu.id = e.user_id
-     WHERE pr.status = 'issue'
+     WHERE pr.status = 'issue' AND pr.is_demo = 0
      ORDER BY pr.service_date DESC, pr.completed_at DESC LIMIT 200`));
 });
 
@@ -500,7 +504,7 @@ router.get('/payments', (req, res) => {
       JOIN users u ON u.id = c.user_id
       LEFT JOIN subscriptions s ON s.id = p.subscription_id
       LEFT JOIN plans pl ON pl.id = s.plan_id
-     ${status ? 'WHERE p.status = ?' : ''}
+     WHERE p.is_demo = 0 ${status ? 'AND p.status = ?' : ''}
      ORDER BY p.created_at DESC LIMIT ?`,
     ...(status ? [status] : []), Number(limit))
     // `demo` is derived from provider, not stored separately - one fact, one place.

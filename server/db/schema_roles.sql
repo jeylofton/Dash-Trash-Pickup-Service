@@ -153,7 +153,9 @@ INSERT OR IGNORE INTO permissions (key, category, label, sort_order) VALUES
   ('system.permissions.manage','System','Manage permissions',112),
   ('system.passwords.reset','System','Reset passwords',113),
   ('system.audit.view','System','View audit logs',114),
-  ('system.settings.manage','System','Manage settings',115);
+  ('system.settings.manage','System','Manage settings',115),
+  ('system.settings.view','System','View system settings',116),
+  ('business.profile.edit','System','Edit business profile',117);
 
 /* ---------- Default roles ---------- */
 INSERT OR IGNORE INTO roles (key, name, description, is_system) VALUES

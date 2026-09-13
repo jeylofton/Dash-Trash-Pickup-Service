@@ -13,6 +13,7 @@ import { audit } from '../lib/audit.js';
 import { DAY_NAMES, today } from '../lib/schedule.js';
 import { dollars } from '../lib/finance.js';
 import { deletability, assertDeletable } from '../lib/deletable.js';
+import { branding } from '../lib/branding.js';
 import { availableActions, resolveAction } from '../lib/lifecycle.js';
 import { COMMUNITY_LIFECYCLE, COMMUNITY_STATUSES, readiness, isServicing }
   from '../lib/community_lifecycle.js';
@@ -67,6 +68,7 @@ router.get('/', requirePermission('customers.view','communities.view'), (req, re
      ${status ? 'WHERE c.status = ?'
        : assignable ? `WHERE c.status NOT IN ('archived','inactive')`
        : `WHERE c.status != 'archived'`}
+       AND c.is_demo = 0
      ORDER BY CASE c.status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1
                             WHEN 'driver_needed' THEN 2 WHEN 'waiting_list' THEN 3 ELSE 4 END,
               c.name`, ...(status ? [status] : []));
@@ -579,8 +581,8 @@ export function publicCommunityRoutes(app) {
         message: c.status === 'active'
           ? 'We service this community.'
           : c.tentative_start_date
-            ? `Dash Trash Pickup is preparing service for this community. Tentative start: ${c.tentative_start_date}.`
-            : 'Dash Trash Pickup is preparing service for this community.',
+            ? `${branding().name} is preparing service for this community. Tentative start: ${c.tentative_start_date}.`
+            : `${branding().name} is preparing service for this community.`,
       })),
     });
   });

@@ -13,28 +13,31 @@ import { api, $ } from '/dashboard/dash.js';
     if (!res.ok) return;                 // production: nothing to show
     demo = await res.json();
   } catch { return; }
-  if (!demo?.password || !Array.isArray(demo.accounts)) return;
+  if (!Array.isArray(demo.accounts) || !demo.accounts.length) return;
 
   const box = $('#demoCreds');
   const head = document.createElement('div');
   const strong = document.createElement('strong');
   strong.textContent = 'Demo accounts';
-  const pw = document.createElement('code');
-  pw.textContent = demo.password;
-  head.append(strong, document.createTextNode(' — password '), pw);
+  head.append(strong);
   box.append(head);
 
+  // Each account carries its own password - the owner's differs from the
+  // training accounts', so filling one shared password would fail all but one.
   for (const acct of demo.accounts) {
+    if (!acct.password) continue;
     const line = document.createElement('div');
     const code = document.createElement('code');
     code.textContent = acct.email;
     code.style.cursor = 'pointer';
     code.addEventListener('click', () => {
       $('#email').value = acct.email;
-      $('#password').value = demo.password;
+      $('#password').value = acct.password;
       $('#password').focus();
     });
-    line.append(code, document.createTextNode(` — ${acct.role}`));
+    const pw = document.createElement('code');
+    pw.textContent = acct.password;
+    line.append(code, document.createTextNode(` — ${acct.role} — password `), pw);
     box.append(line);
   }
 

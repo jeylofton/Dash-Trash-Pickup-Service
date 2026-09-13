@@ -3,6 +3,11 @@ import { api, $, $$, esc, money, fmtDate, fmtTime, statusPill, ISSUE_LABELS, mou
 await mountShell('customer');
 let account = null;
 
+/* The business name for JS-built strings (the header itself is branded
+   server-side). Loaded once from the public branding endpoint. */
+let brandName = '';
+api('/api/branding').then(b => { brandName = b.name || ''; }).catch(() => {});
+
 const table = (headers, rows) =>
   `<thead><tr>${headers.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>${
     rows.length ? rows : `<tr><td colspan="${headers.length}" class="empty">Nothing yet.</td></tr>`}</tbody>`;
@@ -147,7 +152,7 @@ async function loadSupport() {
 }
 
 $('#cancelBtn').addEventListener('click', async () => {
-  if (!confirm('Cancel your Dash Trash Pickup service?')) return;
+  if (!confirm(brandName ? `Cancel your ${brandName} service?` : 'Cancel your service?')) return;
   const msg = $('#cancelMsg');
   try {
     const r = await api('/api/customer/cancel', {

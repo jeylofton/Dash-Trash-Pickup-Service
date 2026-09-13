@@ -9,14 +9,23 @@
 
    The accounts are read from the database, one per role that really
    exists, so a demo-data reset or reseed can never leave the hint
-   pointing at a login that no longer works. The password mirrors
-   DEMO_PASSWORD in db/seed.js (kept as a literal rather than imported
-   because seed.js runs seeding work on import).
+   pointing at a login that no longer works. Each role is seeded with
+   its OWN password (db/seed.js): the owner keeps a real password while
+   the training customer and employee use intentionally simple ones.
+   The hint therefore reports a password PER account - advertising one
+   shared password made every account but the owner's fail to log in.
+   These mirror the literals in db/seed.js (kept as literals rather than
+   imported because seed.js runs seeding work on import).
    ============================================================ */
 
 import { one } from '../db/index.js';
 
-const DEMO_PASSWORD = 'DashDemo2026';
+// role -> the plaintext that role is seeded with, mirroring db/seed.js.
+const DEMO_PASSWORD = {
+  admin: 'DashDemo2026',
+  employee: 'employee',
+  customer: 'customer',
+};
 const ROLES = ['admin', 'employee', 'customer'];
 
 export function devDemoCreds(req, res) {
@@ -29,7 +38,7 @@ export function devDemoCreds(req, res) {
       `SELECT email FROM users WHERE role = ? AND status = 'active' ORDER BY id LIMIT 1`,
       role
     );
-    if (row) accounts.push({ email: row.email, role });
+    if (row) accounts.push({ email: row.email, role, password: DEMO_PASSWORD[role] });
   }
-  res.json({ password: DEMO_PASSWORD, accounts });
+  res.json({ accounts });
 }

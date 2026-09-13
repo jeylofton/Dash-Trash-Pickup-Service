@@ -2018,3 +2018,51 @@ async function loadCredits() {
 }
 
 Object.assign(loaders, { coupons: loadCoupons, credits: loadCredits });
+
+/* ---------- system settings: business profile ---------- */
+
+const BP_FIELDS = {
+  bpName: 'name', bpShort: 'shortName', bpWebsite: 'website', bpAddress: 'address',
+  bpSupportEmail: 'supportEmail', bpSupportPhone: 'supportPhone', bpEmail: 'email', bpPhone: 'phone',
+};
+let bpGuard = null;
+
+async function loadSettings() {
+  const b = await api('/api/settings/business');
+  for (const [id, field] of Object.entries(BP_FIELDS)) {
+    const el = $('#' + id);
+    if (el) el.value = b[field] ?? '';
+  }
+  $('#bpMsg').hidden = true;
+  if (!bpGuard) bpGuard = guardForm('#businessProfileCard');
+  bpGuard.snapshot();   // Cancel restores to what was just loaded
+}
+
+$('#bpSave')?.addEventListener('click', async () => {
+  const msg = $('#bpMsg');
+  msg.hidden = true;
+  const body = {};
+  for (const [id, field] of Object.entries(BP_FIELDS)) body[field] = $('#' + id).value;
+  try {
+    await api('/api/settings/business', { method: 'PATCH', body: JSON.stringify(body) });
+    msg.textContent = 'Saved. Reload any open page to see the new branding.';
+    msg.className = 'msg ok';
+    msg.hidden = false;
+    bpGuard?.snapshot();
+  } catch (e) {
+    msg.textContent = e.message;
+    msg.className = 'msg error';
+    msg.hidden = false;
+  }
+});
+
+Object.assign(loaders, { settings: loadSettings });
+
+/* Reveal the System Settings tab only for users who may view it (admin is
+   absolute). The API enforces this regardless; hiding the tab is courtesy. */
+api('/api/roles/me/permissions').then(p => {
+  if (p.all || p.permissions?.['system.settings.view']) {
+    const btn = document.querySelector('[data-tab="settings"]');
+    if (btn) btn.hidden = false;
+  }
+}).catch(() => {});
