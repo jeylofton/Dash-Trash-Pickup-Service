@@ -401,7 +401,12 @@ footer { background: #111418; color: #aab2ba; padding: 42px 0; }
   margin: 0; font-weight: 800; font-size: .92rem; color: var(--orange-dark);
 }
 .intro-offer-action { display: grid; gap: 9px; justify-items: stretch; }
-.intro-offer-fine { margin: 0; font-size: .76rem; color: var(--muted); max-width: 26ch; }
+.intro-offer-fine {
+  /* Centred under the Claim button it belongs to. margin-inline:auto
+     centres the 26ch block itself; text-align centres the lines in it. */
+  margin: 0 auto; text-align: center;
+  font-size: .76rem; color: var(--muted); max-width: 26ch;
+}
 
 /* ---------- 18. Promotional coupon modal ---------- */
 .promo-overlay {
