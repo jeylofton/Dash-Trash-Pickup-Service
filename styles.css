@@ -401,13 +401,7 @@ footer { background: #111418; color: #aab2ba; padding: 42px 0; }
   margin: 0; font-weight: 800; font-size: .92rem; color: var(--orange-dark);
 }
 .intro-offer-action { display: grid; gap: 9px; justify-items: stretch; }
-.intro-offer-fine {
-  /* Spans the full width of the Claim button above it - both are stretch
-     grid items in .intro-offer-action, so dropping the max-width lets the
-     paragraph match the button's edges. Centred and bold to read as one unit. */
-  margin: 0; text-align: center; font-weight: 700;
-  font-size: .76rem; color: var(--muted);
-}
+.intro-offer-fine { margin: 0; font-weight: 700; font-size: .76rem; color: var(--muted); max-width: 26ch; }
 
 /* ---------- 18. Promotional coupon modal ---------- */
 .promo-overlay {
@@ -655,6 +649,7 @@ footer { background: #111418; color: #aab2ba; padding: 42px 0; }
 /* ---------- 23. Responsive: 640px and below ---------- */
 @media (max-width: 640px) {
   .intro-offer-body { grid-template-columns: 1fr; gap: 18px; padding: 22px 20px 24px; }
+  .intro-offer-fine { max-width: none; }
   .stepper { gap: 4px; }
   .stepper-item { font-size: 0; gap: 0; padding-right: 4px; }
   .stepper-item span { font-size: .72rem; }
