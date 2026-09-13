@@ -26,6 +26,17 @@ test('status is constrained so a typo cannot silently store garbage', () => {
   db.exec(`INSERT INTO users (email,password_hash,role,first_name,last_name)
            VALUES ('pm@test.local','x','customer','P','M')`);
   db.exec(`INSERT INTO customers (user_id) VALUES (last_insert_rowid())`);
+
+  // Insert a valid status to prove the column accepts good values.
+  // Without this positive case, a failing insert could be due to any unrelated reason
+  // (e.g. a missing NOT NULL on a different column), making the constraint's actual
+  // enforcement unverifiable. The valid insert proves the negative assert is attributable
+  // to the CHECK, not an unrelated issue.
+  db.exec(`
+    INSERT INTO payment_methods (customer_id, provider, provider_method_id, status)
+    VALUES (1,'demo','demo_pm_ok','active')`);
+
+  // Now confirm the constraint rejects invalid status values.
   assert.throws(() => db.exec(`
     INSERT INTO payment_methods (customer_id, provider, provider_method_id, status)
     VALUES (1,'demo','demo_pm_1','banana')`));
