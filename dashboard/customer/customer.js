@@ -96,7 +96,7 @@ async function loadPayments() {
   $('#payTable').innerHTML = table(['Date', 'Plan', 'Amount', 'Status'],
     rows.map(p => `<tr>
       <td class="small">${fmtDate(p.paid_at || p.created_at)}</td>
-      <td class="small">${esc(p.plan_name || '—')}</td>
+      <td class="small">${esc(p.plan_name || '—')}${p.demo ? ' <span class="badge badge-demo">DEMO</span>' : ''}</td>
       <td class="num">${money(p.amount)}</td>
       <td>${statusPill(p.status)}${p.failure_reason ? `<br /><span class="small muted">${esc(p.failure_reason)}</span>` : ''}</td>
     </tr>`).join(''));

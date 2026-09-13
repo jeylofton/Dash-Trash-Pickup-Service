@@ -477,7 +477,9 @@ router.get('/payments', (req, res) => {
       LEFT JOIN plans pl ON pl.id = s.plan_id
      ${status ? 'WHERE p.status = ?' : ''}
      ORDER BY p.created_at DESC LIMIT ?`,
-    ...(status ? [status] : []), Number(limit)));
+    ...(status ? [status] : []), Number(limit))
+    // `demo` is derived from provider, not stored separately - one fact, one place.
+    .map(p => ({ ...p, demo: p.provider === 'demo' })));
 });
 
 /* ---------- Audit ---------- */

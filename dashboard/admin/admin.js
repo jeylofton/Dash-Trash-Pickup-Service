@@ -1396,6 +1396,7 @@ async function loadPayments() {
     rows.map(p => `<tr>
       <td><strong>${esc(p.first_name)} ${esc(p.last_name)}</strong>
         ${p.is_intro ? '<span class="pill intro">Intro</span>' : ''}
+        ${p.demo ? '<span class="badge badge-demo">DEMO</span>' : ''}
         <br /><span class="small muted">${esc(p.email)}</span></td>
       <td>${esc(p.plan_code || '—')}</td>
       <td class="num">${money(p.amount_cents / 100)}</td>

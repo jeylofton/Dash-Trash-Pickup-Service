@@ -96,6 +96,16 @@ td.num, th.num { text-align:right; }
 .pill.pending  { background:rgba(66,81,96,.12);   color:var(--steel); }
 .pill.muted    { background:rgba(109,115,123,.12); color:var(--muted); }
 
+/* ---------- badges ---------- */
+/* A payment's demo status is derived server-side from payments.provider;
+   this badge just makes that fact unmistakable wherever a payment row renders. */
+.badge-demo {
+  background:var(--orange); color:#fff;
+  font-size:.72rem; font-weight:700; letter-spacing:.04em;
+  padding:.1rem .4rem; border-radius:3px; margin-left:.4rem;
+  display:inline-block;
+}
+
 /* ---------- forms & buttons ---------- */
 .btn {
   display:inline-flex; align-items:center; justify-content:center; gap:8px;

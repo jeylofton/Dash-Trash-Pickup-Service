@@ -162,14 +162,15 @@ router.get('/credits', (req, res) => {
 
 router.get('/payments', (req, res) => {
   res.json(all(`
-    SELECT p.id, p.amount_cents, p.status, p.paid_at, p.failure_reason, p.created_at,
+    SELECT p.id, p.amount_cents, p.status, p.paid_at, p.failure_reason, p.created_at, p.provider,
            pl.name AS plan_name
       FROM payments p
       LEFT JOIN subscriptions s ON s.id = p.subscription_id
       LEFT JOIN plans pl ON pl.id = s.plan_id
      WHERE p.customer_id = ?
      ORDER BY p.created_at DESC LIMIT 50`, req.customer.id)
-    .map(p => ({ ...p, amount: money(p.amount_cents) })));
+    // `demo` is derived from provider, not stored separately - one fact, one place.
+    .map(p => ({ ...p, amount: money(p.amount_cents), demo: p.provider === 'demo' })));
 });
 
 /** Change plan. The introductory price is never silently lost or granted. */
