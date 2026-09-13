@@ -70,7 +70,7 @@ tx(() => {
     ['vehicle_ins',  'Commercial auto policy',        23000, 'Progressive', 'monthly'],
     ['vehicle_pmt',  'Truck payment',                 41500, 'Ally',        'monthly'],
     ['business_ins', 'General liability',             12000, 'Hiscox',      'monthly'],
-    ['software',     'Route + billing software',       4900, 'Square',      'monthly'],
+    ['software',     'Route + billing software',       4900, 'RouteOps',    'monthly'],
     ['hosting',      'Website hosting and domain',     1800, 'Cloudflare',  'monthly'],
   ];
 
@@ -94,7 +94,7 @@ tx(() => {
           cat.supplies, `Bags and liners — ${c.name}`, 3200 + i * 900, date, c.id);
     });
     run(`INSERT INTO expenses (category_id, description, amount_cents, incurred_on, vendor)
-         VALUES (?, 'Square processing fees', ?, ?, 'Square')`,
+         VALUES (?, 'Card processing fees', ?, ?, 'PaySuite')`,
         cat.processing, 6400 + m * 300, date);
     run(`INSERT INTO expenses (category_id, description, amount_cents, incurred_on, vendor)
          VALUES (?, 'Local ads and door hangers', ?, ?, 'VistaPrint')`,
@@ -118,7 +118,7 @@ tx(() => {
       const status = roll === 3 ? 'failed' : roll === 7 ? 'past_due' : 'paid';
       run(`INSERT INTO payments (customer_id, subscription_id, amount_cents, status, provider,
                                  paid_at, created_at, failure_reason)
-           VALUES (?, ?, ?, ?, 'square',
+           VALUES (?, ?, ?, ?, 'demo',
                    CASE WHEN ? = 'paid' THEN datetime('now','-' || ? || ' days') ELSE NULL END,
                    datetime('now','-' || ? || ' days'),
                    CASE WHEN ? = 'failed' THEN 'Card declined' ELSE NULL END)`,

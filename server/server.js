@@ -1,12 +1,11 @@
 /* ============================================================
-   Dash Trash Pickup - Square payment backend
+   Dash Trash Pickup - payment backend
 
    Endpoints
-     GET  /api/config            publishable Square IDs for the browser
+     GET  /api/config            active payment provider info for the browser
      GET  /api/intro-spots       how many introductory spots are used
      GET  /api/service-area      ZIP coverage check
      POST /api/checkout          customer -> card on file -> subscription
-     POST /api/webhooks/square   Square tells us about renewals/failures
      GET  /api/health
 
    Run:  cp .env.example .env && npm install && npm start
@@ -14,11 +13,9 @@
 
 import 'dotenv/config';
 import express from 'express';
-import { createHmac, timingSafeEqual } from 'node:crypto';
-import { getIntroClaimed, reserveIntroSpot, releaseIntroSpot, recordSignup } from './store.js';
 import { migrate, one } from './db/index.js';
 import { enrol } from './lib/signup.js';
-import { providerName } from './lib/payments/index.js';
+import { payments, providerName } from './lib/payments/index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
 import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
 import { introCoupon } from './lib/coupons.js';
@@ -41,10 +38,6 @@ import { fileURLToPath } from 'node:url';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// TODO(Task 6): purge the remaining Square labelling in /api/config, /api/health,
-// and the boot banner below. Kept as a plain env-var label (no API call) for now.
-const squareEnvironment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
-
 /* ---------- Business rules. Keep these in step with CONFIG in scripts.js. ---------- */
 const INTRO_TOTAL_SPOTS = 100;
 const SERVICE_ZIPS = new Set([
@@ -52,20 +45,7 @@ const SERVICE_ZIPS = new Set([
   '31907','31908','31909','31914','31917',
 ]);
 
-const PLAN_VARIATIONS = {
-  Introductory: process.env.SQUARE_PLAN_INTRODUCTORY,
-  Monthly:      process.env.SQUARE_PLAN_MONTHLY,
-  Quarterly:    process.env.SQUARE_PLAN_QUARTERLY,
-  Annual:       process.env.SQUARE_PLAN_ANNUAL,
-};
-
 /* ---------- Middleware ---------- */
-
-// The webhook route needs the RAW body to verify Square's signature, so it is
-// registered before express.json() and uses its own raw parser.
-app.post('/api/webhooks/square',
-  express.raw({ type: 'application/json' }),
-  handleWebhook);
 
 // Photos arrive as base64 in JSON from the phone camera, so this has to be
 // larger than a typical API. storage.js still enforces the real per-file cap.
@@ -112,7 +92,7 @@ app.use((req, res, next) => {
 });
 
 /* Very small in-memory rate limit on checkout. Real deployments should use a
-   proper limiter, but this stops trivial hammering of the Square API. */
+   proper limiter, but this stops trivial hammering of the payment provider. */
 const hits = new Map();
 function rateLimit(req, res, next) {
   const key = req.ip;
@@ -130,28 +110,27 @@ function rateLimit(req, res, next) {
 /* ---------- Routes ---------- */
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, environment: squareEnvironment });
+  res.json({ ok: true, provider: providerName });
 });
 
-/** Treat an unedited .env.example value as "not configured" rather than
- *  handing the browser a placeholder that Square will reject with a confusing
- *  error. Returning null puts the site cleanly into demo mode instead. */
-const real = (v) => (v && !v.includes('...') && v.trim() !== '' ? v : null);
-
-// Only publishable values. The access token is never sent here.
+// Tells the browser which provider is active and what its UI needs to show -
+// e.g. whether to render card fields (collectsCard) or outcome buttons
+// (simulates). Sourced entirely from the payments module, never from
+// provider-specific env vars.
 app.get('/api/config', (req, res) => {
-  const applicationId = real(process.env.SQUARE_APPLICATION_ID);
-  const locationId = real(process.env.SQUARE_LOCATION_ID);
-  if (!applicationId || !locationId) {
-    console.warn('[config] SQUARE_APPLICATION_ID / SQUARE_LOCATION_ID not set - site will run in demo mode');
-  }
-  res.json({ applicationId, locationId, environment: squareEnvironment });
+  res.json({
+    provider: providerName,
+    collectsCard: payments.collectsCard,
+    simulates: payments.simulates,
+    outcomes: payments.OUTCOMES || [],
+  });
 });
 
 app.get('/api/intro-spots', async (req, res) => {
   try {
-    /* Read from the real coupon system. The old JSON counter is only a
-       fallback for an install that has no launch coupon configured. */
+    /* Read from the real coupon system. If an install has no launch coupon
+       configured, fall back to counting intro customers straight from the
+       database - the only other place that number is ever recorded. */
     const coupon = introCoupon();
     if (coupon) {
       return res.json({
@@ -163,7 +142,8 @@ app.get('/api/intro-spots', async (req, res) => {
         status: coupon.status,
       });
     }
-    res.json({ claimed: await getIntroClaimed(), totalSpots: INTRO_TOTAL_SPOTS });
+    const claimed = one(`SELECT COUNT(*) AS n FROM customers WHERE is_intro = 1`).n;
+    res.json({ claimed, totalSpots: INTRO_TOTAL_SPOTS });
   } catch (err) {
     console.error('[intro-spots]', err);
     res.status(500).json({ error: 'Could not read spot count.' });
@@ -265,54 +245,6 @@ app.use(express.static(SITE_ROOT, {
   dotfiles: 'ignore',   // never serve .env, .git, etc.
 }));
 
-/* ---------- Webhook ---------- */
-
-function handleWebhook(req, res) {
-  const key = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY;
-  const url = process.env.WEBHOOK_URL;
-
-  if (!key || !url) {
-    console.warn('[webhook] not configured; ignoring');
-    return res.sendStatus(200);
-  }
-
-  // Square signs `notification_url + raw_body` with HMAC-SHA256.
-  const signature = req.headers['x-square-hmacsha256-signature'] || '';
-  const expected = createHmac('sha256', key).update(url + req.body.toString('utf8')).digest('base64');
-
-  const a = Buffer.from(signature), b = Buffer.from(expected);
-  if (a.length !== b.length || !timingSafeEqual(a, b)) {
-    console.warn('[webhook] bad signature - rejected');
-    return res.sendStatus(403);
-  }
-
-  const event = JSON.parse(req.body.toString('utf8'));
-  switch (event.type) {
-    case 'invoice.payment_made':
-      console.log('[webhook] renewal paid:', event.data?.id);
-      break;
-    case 'subscription.updated':
-      console.log('[webhook] subscription updated:', event.data?.id);
-      break;
-    case 'invoice.scheduled_charge_failed':
-      // TODO: email the customer, flag the account, pause service
-      console.warn('[webhook] renewal FAILED:', event.data?.id);
-      break;
-    default:
-      console.log('[webhook]', event.type);
-  }
-  res.sendStatus(200);
-}
-
-/* ---------- Helpers ---------- */
-
-/** Square wants YYYY-MM-DD and will reject a date in the past. */
-function normalizeStartDate(input) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (!input || !/^\d{4}-\d{2}-\d{2}$/.test(input)) return today;
-  return input < today ? today : input;
-}
-
 /* ---------- Errors ----------
    Express's default handler renders the stack trace into the RESPONSE,
    which hands an attacker absolute file paths and internal structure.
@@ -338,15 +270,7 @@ setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
 
 app.listen(PORT, async () => {
   console.log(`\n  Dash Trash Pickup API`);
-  console.log(`  http://localhost:${PORT}   [${squareEnvironment}]\n`);
-
-  const unset = Object.entries(PLAN_VARIATIONS).filter(([, v]) => !v).map(([k]) => k);
-  if (unset.length) {
-    console.warn(`  ! No Square plan variation ID for: ${unset.join(', ')}`);
-    console.warn(`    Those plans will be refused at checkout until you set them in .env\n`);
-  }
-
-  // Square credential verification lived here; there is no credential to
-  // verify for the demo provider. Report which provider is active instead.
+  console.log(`  http://localhost:${PORT}\n`);
+  console.log('  Payments: DEMO - no real money moves');
   console.log(`  Payment provider: ${providerName}\n`);
 });

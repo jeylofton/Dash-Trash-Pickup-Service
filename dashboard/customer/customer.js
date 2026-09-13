@@ -105,8 +105,8 @@ async function loadPayments() {
 $('#updateCard').addEventListener('click', () => {
   const msg = $('#cardMsg');
   msg.className = 'msg';
-  msg.textContent = 'Card updates need the payment processor’s secure form. Connect Square’s '
-    + 'card-on-file flow to this button — the API route is not built yet.';
+  msg.textContent = 'Card updates need the payment processor’s secure form. Connect the '
+    + 'provider’s card-on-file flow to this button — the API route is not built yet.';
   msg.hidden = false;
 });
 

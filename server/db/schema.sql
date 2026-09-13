@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS employees (
 CREATE TABLE IF NOT EXISTS customers (
   id                  INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id             INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
-  provider            TEXT,            -- 'square' | 'stripe'
+  provider            TEXT,            -- 'demo' until a real provider is connected
   provider_customer_id TEXT,
   is_intro            INTEGER NOT NULL DEFAULT 0,  -- got one of the first 100 spots
   status              TEXT    NOT NULL DEFAULT 'active'
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS plans (
   interval_months INTEGER NOT NULL,
   price_cents     INTEGER NOT NULL,
   is_intro        INTEGER NOT NULL DEFAULT 0,
-  provider_plan_id TEXT,                    -- Square plan variation id
+  provider_plan_id TEXT,                    -- 'demo' until a real provider is connected
   active          INTEGER NOT NULL DEFAULT 1
 );
 

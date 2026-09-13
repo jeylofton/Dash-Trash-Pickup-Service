@@ -8,7 +8,8 @@ collection service for apartment and townhome communities in Columbus, Georgia.
 > have to.
 
 The website is plain HTML, CSS, and JavaScript with no framework and no build
-step. Payments run on a small Node + Express server that talks to Square.
+step. Payments run on a small Node + Express server, currently backed by a
+demo provider that simulates a processor and moves no real money.
 
 ---
 
@@ -19,7 +20,7 @@ step. Payments run on a small Node + Express server that talks to Square.
 - [Project structure](#project-structure)
 - [Configuration](#configuration) ← **edit pricing here**
 - [How the first-100 offer works](#how-the-first-100-offer-works)
-- [Payments (Square)](#payments-square)
+- [Payments (demo provider)](#payments-demo-provider)
 - [Dashboard (admin / employee / customer)](#dashboard-admin--employee--customer)
 - [Deploying](#deploying)
 - [Before launch](#before-launch)
@@ -130,10 +131,9 @@ cd server && npm run dev
 ├── scripts.js          # all behavior, config at the top
 ├── README.md
 ├── .gitignore
-├── server/             # Square payment backend (Node + Express)
+├── server/             # payment + dashboard backend (Node + Express)
 │   ├── server.js       #   API routes
-│   ├── square.js       #   Square REST client
-│   ├── store.js        #   introductory-spot counter
+│   ├── lib/payments/   #   demo payment provider
 │   ├── .env.example    #   copy to .env and fill in
 │   └── package.json
 └── images/
@@ -270,111 +270,39 @@ also why it can appear on one machine and not another.
 
 ---
 
-## Payments (Square)
+## Payments (demo provider)
 
-Payments run through **Square**, using recurring subscriptions and Square's
-Web Payments SDK. Card details are entered in an iframe served by Square and go
-straight to Square — **a raw card number never touches this site or its server.**
+There is no real payment processor connected. `PAYMENT_PROVIDER=demo` is the
+default and only working value — it simulates a processor entirely inside the
+server: no card is collected, no network call is made, and nothing is ever
+charged. `server/lib/payments/index.js` is the seam a real provider would plug
+into later; nothing else in the app knows or cares which provider is active.
 
 ```
-Browser                          Your server                    Square
-───────                          ───────────                    ──────
-Square card iframe
-  → card token  ──────────────→  POST /api/checkout
-                                   create customer      ──────→
-                                   create card on file  ──────→
-                                   create subscription  ──────→
-                                 ←─ subscription id
+Browser                          Your server                    Demo provider
+───────                          ───────────                    ─────────────
+pick an outcome  ──────────────→ POST /api/checkout
+                                   create customer      ──────→  (in-memory, no network)
+                                   save payment method  ──────→
+                                   charge               ──────→
+                                 ←─ status
   ←── confirmation ────────────
 ```
 
-The site works **without** the server running — it falls back to demo mode,
-where the signup flow completes end to end but nothing is charged. That's what
-lets you keep developing the front end without Square credentials.
+`payments.charge()` accepts one of four simulated outcomes —
+`success`, `failed`, `declined`, `pending` — chosen by whoever is testing, so
+you can exercise every branch of the signup and billing flow without ever
+touching a real card number.
 
-### Square setup
-
-**1. Create an application**
-
-Go to <https://developer.squareup.com/apps> → *Create app*. From the app's
-**Credentials** page, copy the **Sandbox** values:
-
-| Value | Where it goes | Secret? |
-|---|---|---|
-| Sandbox Access Token | `SQUARE_ACCESS_TOKEN` | **Yes — server only** |
-| Sandbox Application ID | `SQUARE_APPLICATION_ID` | No — sent to the browser |
-| Sandbox Location ID | `SQUARE_LOCATION_ID` | No — sent to the browser |
-
-> The access token can create charges on your account. It must never appear in
-> `scripts.js`, in the HTML, or in any file you commit.
-
-**2. Create the subscription plans**
-
-Run the setup script instead of hand-entering plans in the dashboard. It talks
-to Square's Catalog API, creates all four plans, and writes their variation IDs
-straight into `.env`.
+### Configure and run
 
 ```bash
 cd server
-cp .env.example .env
-# paste your Sandbox Access Token into SQUARE_ACCESS_TOKEN yourself
-npm run square:check     # dry run - shows what it would create
-npm run square:setup     # creates the plans and fills in .env
-```
-
-It is safe to re-run: plans are matched by name, so a second run reuses what
-already exists rather than creating duplicates.
-
-| Plan | Billing | `.env` variable |
-|---|---|---|
-| Introductory | $18/mo for 12 months, **then $28/mo** | `SQUARE_PLAN_INTRODUCTORY` |
-| Monthly | $28/mo | `SQUARE_PLAN_MONTHLY` |
-| Quarterly | $74 every 3 months | `SQUARE_PLAN_QUARTERLY` |
-| Annual | $276/year | `SQUARE_PLAN_ANNUAL` |
-
-> The introductory rate is a **12-month term**, not a permanent price. Square
-> bills it as a two-phase plan. The site discloses the term from
-> `CONFIG.intro.termMonths` in `scripts.js` - if you change the term in one
-> place, change it in `server/bin/square-setup.js` too, or the page will
-> advertise something Square is not billing.
-
-> Prices live in `CONFIG.pricing` in `scripts.js` and are mirrored at the top of
-> `server/bin/square-setup.js`. The website displays `CONFIG`; Square charges
-> the plan variation. If they disagree, **Square wins** and your customer is
-> charged something different from what they saw.
-
-**Going to production**
-
-```bash
-cp .env.production.example .env.production
-# paste your Production Access Token into SQUARE_ACCESS_TOKEN yourself
-npm run square:setup:prod
-```
-
-That creates the same four plans in your live catalog. To actually go live,
-copy the production credentials and plan IDs into `.env` and set
-`SQUARE_ENVIRONMENT=production`. The browser SDK switches automatically.
-
-**3. Configure and run**
-
-```bash
-cd server
-cp .env.example .env     # then fill in the values above
+cp .env.example .env     # PAYMENT_PROVIDER=demo is already set
 npm install
+node db/seed.js          # demo data; add --reset to rebuild
 npm start
 ```
-
-The server checks your credentials at boot and tells you what's missing:
-
-```
-  Dash Trash Pickup API
-  http://localhost:3000   [sandbox]
-
-  Square credentials OK - 1 location(s) found
-  Using location: Dash Trash Pickup (L7XYZ...)
-```
-
-**4. Run the site against it**
 
 The server serves the public site too, so there is no second process:
 open <http://localhost:3000>.
@@ -382,63 +310,24 @@ open <http://localhost:3000>.
 > This app uses port 3000. Avoid 5000 on macOS — AirPlay Receiver holds it and
 > returns a confusing `403`.
 
-### Testing with sandbox cards
-
-While `SQUARE_ENVIRONMENT=sandbox`, use Square's
-[test card numbers](https://developer.squareup.com/docs/devtools/sandbox/payments) —
-e.g. `4111 1111 1111 1111`, any future expiry, any CVV, ZIP `31904`. Real cards
-are declined in sandbox, and test cards are declined in production.
-
-### Going live
-
-1. Swap every `.env` value for its **Production** equivalent
-2. Set `SQUARE_ENVIRONMENT=production`
-3. Recreate the subscription plans in your production catalog — sandbox and
-   production catalogs are separate, so the plan variation IDs are different
-4. Set `ALLOWED_ORIGINS` to your real domain
-5. Configure the webhook (below)
-6. Serve everything over HTTPS — Square's SDK refuses to run on plain HTTP
-   outside localhost
-
-### Webhooks
-
-Recurring charges happen on Square's schedule, not yours, so a renewal
-succeeding or failing is something Square has to tell you about.
-
-In the Square Dashboard → **Webhooks**, add a subscription pointing at
-`https://your-domain.com/api/webhooks/square` for at least:
-
-- `invoice.payment_made` — a renewal succeeded
-- `invoice.scheduled_charge_failed` — a renewal failed; suspend service or chase the customer
-- `subscription.updated` — paused, resumed, or cancelled
-
-Put the signing key in `SQUARE_WEBHOOK_SIGNATURE_KEY` and the exact URL in
-`WEBHOOK_URL`. The server verifies every webhook's HMAC signature and rejects
-anything that doesn't match — without that check, anyone who finds the URL could
-post fake payment events.
-
 ### API reference
 
 | Endpoint | Purpose |
 |---|---|
 | `GET /api/health` | Liveness check |
-| `GET /api/config` | Publishable Square IDs for the browser |
+| `GET /api/config` | `{ provider, collectsCard, simulates, outcomes }` |
 | `GET /api/intro-spots` | `{ claimed, totalSpots }` |
 | `GET /api/service-area?zip=` | `{ available }` |
-| `POST /api/checkout` | Customer → card on file → subscription |
-| `POST /api/webhooks/square` | Signed events from Square |
+| `POST /api/checkout` | Customer → payment method → subscription |
 
 ### How the 100 spots stay honest
 
-The introductory spot is **reserved before** Square is called and **released if
-Square fails**, so a declined card never burns a spot and nobody is charged the
-intro rate after it sells out. Reservation is serialized through a lock, tested
-at 250 simultaneous attempts against a 100-spot pool: exactly 100 granted.
-
-> **Single process only.** The counter lives in `server/data/signups.json` and
-> the lock is per-process. If you ever run more than one instance, move the
-> counter to a database and do the increment in one conditional statement —
-> `store.js` has the SQL in a comment.
+Every signup writes its records to the database **before** the provider is
+called (`lib/signup.js`), and the promotional redemption that actually counts
+against the 100-spot cap is recorded only **after** the charge comes back
+`paid`, inside the same transaction that marks the payment paid. That check
+and that write happen atomically, so two simultaneous checkouts cannot both
+claim the last spot, and a declined or failed charge never burns one.
 
 ## Dashboard (admin / employee / customer)
 
@@ -534,7 +423,7 @@ timestamp. Visible on the admin dashboard.
 Honest list — the API exists, the UI does not:
 
 - **Drag-to-reorder route stops** — `PUT /api/admin/routes/:id/stops/order` works; there is no drag UI
-- **Update payment method** — the customer button explains what is needed; no Square card-update route yet
+- **Update payment method** — the customer button explains what is needed; no card-update route yet
 - **Create/edit forms** — admin can create communities, buildings, units, employees, and routes via API; the UI is read-plus-reassign
 - **GPS capture** — columns exist on `pickup_records`, nothing writes them
 - **Reports** — only the open-issues table
@@ -1054,8 +943,8 @@ Placeholder values that need replacing:
 - [ ] **Final pricing** — confirm the monthly rate and both discounts
 - [ ] **Introductory rate** — decide between $15 and $18
 - [ ] **Service ZIP list** — replace the demo list with real coverage
-- [ ] **Square production credentials** — app, location, and plan variation IDs
-- [ ] **Webhook endpoint** — deployed over HTTPS with its signature key set
+- [ ] **A real payment provider** — the site currently runs on a demo provider
+      that moves no money; connect a real processor before accepting customers
 - [ ] **Accepted waste types** — publish restrictions (hazardous materials,
       oversized items, loose liquids, construction debris, unbagged waste)
 - [ ] **Holiday schedule** — decide what happens when a pickup day is a holiday

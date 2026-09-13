@@ -132,7 +132,7 @@ tx(() => {
     if (intro) introUsed++;
 
     const cid = run(
-      `INSERT INTO customers (user_id, is_intro, provider, status) VALUES (?, ?, 'square', 'active')`,
+      `INSERT INTO customers (user_id, is_intro, provider, status) VALUES (?, ?, 'demo', 'active')`,
       uid, intro ? 1 : 0
     ).lastInsertRowid;
 
@@ -141,14 +141,14 @@ tx(() => {
     const subId = run(
       `INSERT INTO subscriptions (customer_id, plan_id, locked_price_cents, status, provider,
                                   started_at, next_billing_date)
-       VALUES (?, ?, ?, ?, 'square', date('now','-30 days'), date('now','+' || ? || ' days'))`,
+       VALUES (?, ?, ?, ?, 'demo', date('now','-30 days'), date('now','+' || ? || ' days'))`,
       cid, plan.id, plan.price_cents, 'active', String(30 * plan.interval_months)
     ).lastInsertRowid;
 
     // payment history, with a few realistic problems
     const status = i % 11 === 5 ? 'past_due' : i % 13 === 7 ? 'failed' : 'paid';
     run(`INSERT INTO payments (customer_id, subscription_id, amount_cents, status, provider, paid_at)
-         VALUES (?, ?, ?, ?, 'square', CASE WHEN ? = 'paid' THEN datetime('now','-28 days') ELSE NULL END)`,
+         VALUES (?, ?, ?, ?, 'demo', CASE WHEN ? = 'paid' THEN datetime('now','-28 days') ELSE NULL END)`,
         cid, subId, plan.locked_price_cents ?? plan.price_cents, status, status);
     if (status !== 'paid') {
       run(`UPDATE subscriptions SET status = 'past_due' WHERE id = ?`, subId);
