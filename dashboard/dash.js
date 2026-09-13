@@ -148,9 +148,11 @@ export function guardForm(root, { onCancel } = {}) {
   snapshot();
   guards.add(guard);
 
-  // Wire any Cancel button inside this area.
-  $$('[data-cancel]', el).forEach(b => b.addEventListener('click', () => {
-    if (isDirty() && !confirm('Discard your unsaved changes?')) return;
+  /* Convenience wiring for simple forms: a [data-cancel] button restores
+     the snapshot. Screens that also have to close a panel and clear a
+     selection wire their own Cancel and leave this attribute off. */
+  $$('[data-cancel]', el).forEach(b => b.addEventListener('click', async () => {
+    if (isDirty() && !(await confirmDiscard())) return;
     restore();
     snapshot();
     onCancel?.();
@@ -222,4 +224,379 @@ export async function renderDeleteControl(mountSelector, {
       alert(e.message + (e.suggestion ? `\n\n${e.suggestion}` : ''));
     }
   });
+}
+
+/* ============================================================
+   Single-action lifecycle control.
+
+   Current status → pick ONE valid action → fill in what it needs
+   → confirm → done. Deliberately NOT a row of status buttons:
+   with one control there is nothing to click by accident and no
+   way to ask for two conflicting changes at once.
+
+   The server owns the rules. This only draws what /actions
+   returned, and the same rules are checked again on submit.
+   ============================================================ */
+
+const DAY_LABELS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+const TONE_CLASS = { primary: 'btn-primary', danger: 'btn-danger', warn: '', normal: '' };
+
+/** One field of an action's form, described by the server. */
+function fieldHtml(f) {
+  const id = `lcf_${f.name}`;
+  const req = f.required ? ' <span class="req">*</span>' : '';
+  const hint = f.hint ? `<span class="small muted">${esc(f.hint)}</span>` : '';
+  const label = `<label for="${id}">${esc(f.label)}${req}</label>`;
+
+  if (f.type === 'days') {
+    return `<div class="lc-field"><span class="lc-label">${esc(f.label)}${req}</span>
+      <div class="lc-days">${DAY_LABELS.map((d, i) =>
+        `<label class="lc-day"><input type="checkbox" name="${esc(f.name)}" value="${i}" /> ${d.slice(0,3)}</label>`
+      ).join('')}</div>${hint}</div>`;
+  }
+  if (f.type === 'select') {
+    return `<div class="lc-field">${label}
+      <select id="${id}" data-field="${esc(f.name)}">
+        <option value="">Choose…</option>
+        ${(f.options || []).map(o =>
+          `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('')}
+      </select>${hint}</div>`;
+  }
+  if (f.type === 'textarea') {
+    return `<div class="lc-field">${label}
+      <textarea id="${id}" data-field="${esc(f.name)}" rows="3"></textarea>${hint}</div>`;
+  }
+  return `<div class="lc-field">${label}
+    <input id="${id}" data-field="${esc(f.name)}" type="${f.type === 'date' ? 'date' : 'text'}" />${hint}</div>`;
+}
+
+/** Read the filled-in form back out. */
+function readFields(root, fields) {
+  const values = {};
+  for (const f of fields) {
+    if (f.type === 'days') {
+      values[f.name] = $$(`input[name="${f.name}"]:checked`, root).map(i => Number(i.value));
+    } else {
+      const el = $(`[data-field="${f.name}"]`, root);
+      values[f.name] = el ? el.value.trim() : '';
+    }
+  }
+  return values;
+}
+
+/** Human-readable echo of what is about to happen, for the confirm screen. */
+function summarise(fields, values) {
+  return fields.map(f => {
+    let v = values[f.name];
+    if (Array.isArray(v)) v = v.map(d => DAY_LABELS[d]).join(', ');
+    if (f.type === 'select') v = f.options?.find(o => String(o.value) === String(v))?.label ?? v;
+    if (f.type === 'date' && v) v = fmtDate(v);
+    if (!v) return '';
+    return `<div class="lc-sum"><span>${esc(f.label)}</span><strong>${esc(v)}</strong></div>`;
+  }).join('');
+}
+
+/**
+ * Mount the control.
+ *
+ *   lifecycleControl('#zone', {
+ *     actionsUrl: `/api/communities/${id}/actions`,
+ *     submitUrl:  `/api/communities/${id}/lifecycle`,
+ *     label: 'community', onDone: reload,
+ *   })
+ */
+export async function lifecycleControl(mountSelector, {
+  actionsUrl, submitUrl, label = 'record', onDone, autoOpen = false,
+}) {
+  const mount = typeof mountSelector === 'string' ? $(mountSelector) : mountSelector;
+  if (!mount) return;
+
+  let data;
+  try { data = await api(actionsUrl); }
+  catch (e) {
+    mount.innerHTML = `<p class="msg error">${esc(e.message)}</p>`;
+    return;
+  }
+
+  const name = data.community?.name ?? data.name ?? label;
+  const deletion = data.deletion;
+
+  /* Permanent deletion sits in the same single-select list, but only when
+     the server confirms the record has never been used. Anything with
+     history is offered Archive instead — never a delete it cannot honour. */
+  const choices = [
+    ...data.actions,
+    ...(deletion?.deletable ? [{
+      key: '__delete__', label: 'Delete Permanently', tone: 'danger', enabled: true,
+      description: deletion.reason, fields: [],
+      confirmTitle: `Permanently delete ${name}?`,
+      effects: ['The record is removed for good. This cannot be undone.'],
+    }] : []),
+  ];
+
+  const render = (step, state = {}) => {
+    if (step === 'choose') {
+      mount.innerHTML = `
+        <div class="lifecycle">
+          <div class="lc-head">
+            <div><span class="lc-now">Current status</span>
+              <span class="pill ${esc(data.status.tone)}">${esc(data.status.label)}</span></div>
+            <p class="small muted">${esc(data.status.description || '')}</p>
+          </div>
+          ${choices.length ? `
+            <fieldset class="lc-choices">
+              <legend>Select one action</legend>
+              ${choices.map(a => `
+                <label class="lc-choice ${a.enabled ? '' : 'is-disabled'} ${a.tone === 'danger' ? 'is-danger' : ''}">
+                  <input type="radio" name="lcAction" value="${esc(a.key)}" ${a.enabled ? '' : 'disabled'} />
+                  <span><strong>${esc(a.label)}</strong>
+                    <span class="small muted">${esc(a.description || '')}</span>
+                    ${a.enabled ? '' :
+                      `<span class="small bad-text">${esc(a.blockedReason || 'Not available yet.')}</span>`}
+                  </span>
+                </label>`).join('')}
+            </fieldset>
+            <button class="btn btn-primary" data-lc-continue disabled>Continue</button>
+            <button class="btn" data-lc-close>Close</button>
+            <p class="small muted">One action is processed at a time.</p>`
+          : `<p class="muted small">No status change is available for this ${esc(label)}.</p>
+             <button class="btn" data-lc-close>Close</button>`}
+        </div>`;
+
+      const cont = $('[data-lc-continue]', mount);
+      $$('input[name="lcAction"]', mount).forEach(r =>
+        r.addEventListener('change', () => { cont.disabled = false; }));
+      cont?.addEventListener('click', () => {
+        const picked = $('input[name="lcAction"]:checked', mount);
+        if (!picked) return;
+        const action = choices.find(a => a.key === picked.value);
+        render(action.fields.length ? 'details' : 'confirm', { action, values: {} });
+      });
+    }
+
+    if (step === 'details') {
+      const { action } = state;
+      mount.innerHTML = `
+        <div class="lifecycle">
+          <h3>${esc(action.label)}</h3>
+          <p class="small muted">${esc(action.description || '')}</p>
+          <div class="lc-form">${action.fields.map(fieldHtml).join('')}</div>
+          <p class="msg error" data-lc-err hidden></p>
+          <button class="btn btn-primary" data-lc-review>Continue</button>
+          <button class="btn" data-lc-back>Go back</button>
+        </div>`;
+      // A sensible default beats an empty date box that must be guessed at.
+      const firstDate = $('input[type="date"]', mount);
+      if (firstDate) firstDate.value = new Date().toISOString().slice(0, 10);
+
+      $('[data-lc-back]', mount).addEventListener('click', () => render('choose'));
+      $('[data-lc-review]', mount).addEventListener('click', () => {
+        const values = readFields(mount, action.fields);
+        const missing = action.fields.find(f => f.required &&
+          (Array.isArray(values[f.name]) ? !values[f.name].length : !values[f.name]));
+        if (missing) {
+          const err = $('[data-lc-err]', mount);
+          err.textContent = `${missing.label} is required.`; err.hidden = false;
+          return;
+        }
+        render('confirm', { action, values });
+      });
+    }
+
+    if (step === 'confirm') {
+      const { action, values = {} } = state;
+      mount.innerHTML = `
+        <div class="lifecycle lc-confirm ${action.tone === 'danger' ? 'is-danger' : ''}">
+          <h3>${esc(action.confirmTitle || `${action.label}?`)}</h3>
+          ${summarise(action.fields, values)}
+          ${action.effects?.length ? `<ul class="lc-effects">${
+            action.effects.map(e => `<li>${esc(e)}</li>`).join('')}</ul>` : ''}
+          ${action.preserves?.length ? `
+            <div class="lc-keeps"><strong>Nothing below is deleted or changed:</strong>
+              <ul>${action.preserves.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>` : ''}
+          ${action.key === '__delete__' ? `
+            <div class="lc-field"><label for="lcConfirmName">Type the name to confirm</label>
+              <input id="lcConfirmName" placeholder="${esc(name)}" /></div>` : ''}
+          <p class="msg error" data-lc-err hidden></p>
+          <button class="btn ${TONE_CLASS[action.tone] || 'btn-primary'}" data-lc-go>
+            ${action.key === '__delete__' ? 'Delete permanently' : `Confirm — ${esc(action.label)}`}</button>
+          <button class="btn" data-lc-back>Go back</button>
+        </div>`;
+
+      $('[data-lc-back]', mount).addEventListener('click', () =>
+        render(action.fields.length ? 'details' : 'choose', state));
+
+      $('[data-lc-go]', mount).addEventListener('click', async (ev) => {
+        const err = $('[data-lc-err]', mount);
+        const btn = ev.currentTarget;
+        err.hidden = true;
+
+        if (action.key === '__delete__' && $('#lcConfirmName', mount).value.trim() !== name) {
+          err.textContent = 'Type the name exactly to confirm deletion.'; err.hidden = false;
+          return;
+        }
+
+        btn.disabled = true; btn.textContent = 'Working…';
+        try {
+          const res = action.key === '__delete__'
+            ? await api(deletion.url, { method: 'DELETE' })
+            : await api(submitUrl, { method: 'POST',
+                body: JSON.stringify({ action: action.key, ...values }) });
+
+          mount.innerHTML = `<div class="lifecycle"><p class="msg ok">${
+            esc(res.message || 'Done.')}</p>${
+            res.warning ? `<p class="msg error">${esc(res.warning)}</p>` : ''}</div>`;
+          onDone?.(res, action.key);
+        } catch (e) {
+          btn.disabled = false; btn.textContent = 'Try again';
+          err.innerHTML = esc(e.message) + (e.suggestion ? `<br />${esc(e.suggestion)}` : '');
+          err.hidden = false;
+        }
+      });
+    }
+  };
+
+  $$('[data-lc-close]', mount);
+  mount.addEventListener('click', (e) => {
+    if (e.target.matches('[data-lc-close]')) { mount.innerHTML = ''; onDone?.(null, 'closed'); }
+  });
+
+  render('choose');
+  if (!autoOpen) mount.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+/* ============================================================
+   Page state: list → select → view/edit → save or cancel → list.
+
+   Three things are kept deliberately separate:
+
+     PERSISTED   what the server has. Only Save changes it.
+     SELECTED    which record is on screen. Closing clears it.
+     DRAFT       what is typed into a form. Cancel throws it away.
+
+   Form fields are never bound to the persisted object, so an
+   abandoned edit cannot leak into the rest of the app: the draft
+   lives in the DOM inputs and dies with them.
+   ============================================================ */
+
+/** A floating confirmation with the two answers the situation actually has. */
+export function confirmDiscard({
+  title = 'You have unsaved changes.',
+  body = 'If you leave now, your changes will not be saved.',
+  keep = 'Keep Editing',
+  discard = 'Discard Changes',
+} = {}) {
+  return new Promise((resolve) => {
+    const back = document.createElement('div');
+    back.className = 'modal-back';
+    back.innerHTML = `
+      <div class="modal" role="alertdialog" aria-modal="true" aria-label="${esc(title)}">
+        <h3>${esc(title)}</h3>
+        <p class="small">${esc(body)}</p>
+        <div class="modal-actions">
+          <button class="btn btn-primary" data-keep>${esc(keep)}</button>
+          <button class="btn btn-danger" data-discard>${esc(discard)}</button>
+        </div>
+      </div>`;
+    const done = (answer) => { back.remove(); document.removeEventListener('keydown', onKey); resolve(answer); };
+    const onKey = (e) => { if (e.key === 'Escape') done(false); };
+
+    back.addEventListener('click', (e) => {
+      if (e.target.matches('[data-keep]') || e.target === back) done(false);
+      if (e.target.matches('[data-discard]')) done(true);
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(back);
+    $('[data-keep]', back)?.focus();
+  });
+}
+
+/** A brief success/error banner, for when the form that reported it has closed. */
+export function toast(message, kind = 'ok') {
+  let host = $('#toastHost');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toastHost';
+    document.body.appendChild(host);
+  }
+  const el = document.createElement('div');
+  el.className = `toast ${kind}`;
+  el.textContent = message;
+  host.appendChild(el);
+  setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, 4200);
+}
+
+/**
+ * One management section's selection state.
+ *
+ *   const routes = createSection({ detail: '#routeDetail', list: '#routeListZone' });
+ *   routes.select(id);            // remember what is open
+ *   await routes.close();         // asks first if a tracked form is dirty
+ *   routes.reset();               // hard clear, no questions (tab re-entry)
+ *
+ * `track(guard)` hands the section the guardForm for whatever edit form is
+ * currently open, so the section knows whether a draft is in progress.
+ */
+export function createSection({ detail, list, onReset } = {}) {
+  const el = () => (typeof detail === 'string' ? $(detail) : detail);
+  const listEl = () => (list ? (typeof list === 'string' ? $(list) : list) : null);
+
+  let selectedId = null;
+  let guards = [];
+
+  const isDirty = () => guards.some(g => g.el?.isConnected && g.isDirty());
+
+  const clear = () => {
+    const box = el();
+    if (box) { box.hidden = true; box.innerHTML = ''; }
+    const lst = listEl();
+    if (lst) lst.hidden = false;
+    guards.forEach(g => g.release?.());
+    guards = [];
+    selectedId = null;
+    onReset?.();
+  };
+
+  return {
+    get id() { return selectedId; },
+    get isSelected() { return selectedId != null; },
+    isDirty,
+
+    /** Record what is open. Call from the show/render function. */
+    select(id) {
+      const next = id == null ? null : String(id);
+      // A different record means the previous record's draft is gone.
+      if (next !== selectedId) { guards.forEach(g => g.release?.()); guards = []; }
+      selectedId = next;
+    },
+
+    /** Register the draft guard for the form that just rendered. */
+    track(guard) { if (guard) guards.push(guard); return guard; },
+
+    /**
+     * Close the detail view and return to the list.
+     * Returns false if the user chose to keep editing.
+     */
+    async close({ force = false } = {}) {
+      if (!force && isDirty() && !(await confirmDiscard())) return false;
+      clear();
+      return true;
+    },
+
+    /** Hard reset with no prompt — leaving or re-entering the tab. */
+    reset() { clear(); },
+
+    /**
+     * Guard opening a different record while a draft is in progress.
+     * Returns false if the user chose to keep editing the current one.
+     */
+    async canSwitchTo(id) {
+      if (String(id) === selectedId) return true;
+      if (!isDirty()) return true;
+      return confirmDiscard({
+        body: 'Opening another record will discard the changes you have not saved.',
+      });
+    },
+  };
 }

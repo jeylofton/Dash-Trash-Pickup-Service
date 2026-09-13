@@ -400,7 +400,9 @@ router.patch('/routes/:id', requirePermission('routes.edit'), (req, res) => {
     detail: { name: route.name, changes: { ...changes, ...(driverChange ? { driver: driverChange } : {}) },
               effectiveDate: effective },
   });
-  res.json({ ok: true, changes, effectiveDate: effective });
+  // Report the driver reassignment too — it is the change most often made.
+  res.json({ ok: true, effectiveDate: effective,
+             changes: { ...changes, ...(driverChange ? { driver: driverChange } : {}) } });
 });
 
 /** Archive rather than delete. Deletion is only for a route never used. */

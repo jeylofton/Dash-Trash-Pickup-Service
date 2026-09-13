@@ -20,6 +20,7 @@ import { createCustomer, saveCard, createSubscription,
 import { getIntroClaimed, reserveIntroSpot, releaseIntroSpot, recordSignup } from './store.js';
 import { migrate, one } from './db/index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
+import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
 import { introCoupon } from './lib/coupons.js';
 import { attachUser, requirePasswordCurrent } from './lib/rbac.js';
 import { purgeExpiredSessions } from './lib/auth.js';
@@ -403,7 +404,9 @@ app.use((err, req, res, next) => {
 /* ---------- Boot ---------- */
 
 migrate();
-const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes(), ...migrateAdminControls(), ...migrateDynamicRoles()];
+const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes(),
+                      ...migrateAdminControls(), ...migrateDynamicRoles(),
+                      ...migrateCommunityLifecycle()];
 if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
 purgeExpiredSessions();
 setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();

@@ -10,16 +10,16 @@ import { Router } from 'express';
 import { one, all, run, tx } from '../db/index.js';
 import { requirePermission, setting } from '../lib/permissions.js';
 import { audit } from '../lib/audit.js';
-import { DAY_NAMES } from '../lib/schedule.js';
+import { DAY_NAMES, today } from '../lib/schedule.js';
 import { dollars } from '../lib/finance.js';
 import { deletability, assertDeletable } from '../lib/deletable.js';
+import { availableActions, resolveAction } from '../lib/lifecycle.js';
+import { COMMUNITY_LIFECYCLE, COMMUNITY_STATUSES, readiness, isServicing }
+  from '../lib/community_lifecycle.js';
 
 export const router = Router();
 
-export const COMMUNITY_STATUS = [
-  'lead', 'waiting_list', 'driver_needed', 'pending_setup',
-  'scheduled', 'active', 'on_hold', 'paused', 'inactive', 'archived',
-];
+export const COMMUNITY_STATUS = Object.keys(COMMUNITY_STATUSES);
 
 /* Structural fields are locked once a property has operational history:
    renaming it or changing its unit count would make old records lie. */
@@ -35,7 +35,6 @@ function hasHistory(communityId) {
              WHERE u.community_id = ?) AS customers`, communityId, communityId);
   return (n.pickups + n.customers) > 0;
 }
-const SERVICING = 'active';
 
 const money = (c) => dollars(c || 0);
 
@@ -49,7 +48,10 @@ function potentialMonthly(community) {
 /* ---------- list ---------- */
 
 router.get('/', requirePermission('customers.view','communities.view'), (req, res) => {
-  const { status } = req.query;
+  const { status, assignable } = req.query;
+  /* Archived properties stay out of everyday views but are never gone:
+     ask for status=archived to see them. `assignable` is what the route
+     and customer screens use — only somewhere we could really service. */
   const rows = all(`
     SELECT c.*,
            (SELECT COUNT(*) FROM units u WHERE u.community_id = c.id AND u.status='active') AS unit_count,
@@ -62,7 +64,9 @@ router.get('/', requirePermission('customers.view','communities.view'), (req, re
              WHERE ps.community_id = c.id AND ps.active = 1) AS schedule_days,
            (SELECT COUNT(*) FROM route_stops rs WHERE rs.community_id = c.id) AS route_count
       FROM communities c
-     ${status ? 'WHERE c.status = ?' : ''}
+     ${status ? 'WHERE c.status = ?'
+       : assignable ? `WHERE c.status NOT IN ('archived','inactive')`
+       : `WHERE c.status != 'archived'`}
      ORDER BY CASE c.status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1
                             WHEN 'driver_needed' THEN 2 WHEN 'waiting_list' THEN 3 ELSE 4 END,
               c.name`, ...(status ? [status] : []));
@@ -70,8 +74,9 @@ router.get('/', requirePermission('customers.view','communities.view'), (req, re
   res.json(rows.map(c => ({
     ...c,
     scheduleDays: (c.schedule_days || '').split(',').filter(Boolean).map(d => DAY_NAMES[Number(d)]),
+    statusLabel: COMMUNITY_STATUSES[c.status]?.label ?? c.status,
     potentialMonthlyRevenue: money(potentialMonthly(c)),
-    isServicing: c.status === SERVICING,
+    isServicing: isServicing(c.status),
   })));
 });
 
@@ -80,8 +85,17 @@ router.get('/:id', requirePermission('customers.view','communities.view'), (req,
   const community = one('SELECT * FROM communities WHERE id = ?', req.params.id);
   if (!community) return res.status(404).json({ error: 'Community not found.' });
 
+  const meta = COMMUNITY_STATUSES[community.status] ?? { label: community.status, tone: '' };
   res.json({
-    community: { ...community, potentialMonthlyRevenue: money(potentialMonthly(community)) },
+    community: {
+      ...community,
+      statusLabel: meta.label,
+      statusDescription: meta.description,
+      isServicing: isServicing(community.status),
+      heldDays: (() => { try { return JSON.parse(community.held_days || '[]'); } catch { return []; } })()
+        .map(d => DAY_NAMES[Number(d)]),
+      potentialMonthlyRevenue: money(potentialMonthly(community)),
+    },
     schedule: all('SELECT day_of_week FROM pickup_schedules WHERE community_id = ? AND active = 1', community.id)
       .map(r => ({ day: r.day_of_week, name: DAY_NAMES[r.day_of_week] })),
     buildings: all('SELECT * FROM buildings WHERE community_id = ? ORDER BY sort_order, name', community.id),
@@ -104,10 +118,7 @@ router.get('/:id', requirePermission('customers.view','communities.view'), (req,
       .map(r => ({ ...r, dayName: DAY_NAMES[r.day_of_week] })),
     waitlist: all(`SELECT * FROM community_waitlist WHERE community_id = ?
                     ORDER BY created_at DESC`, community.id),
-    statusHistory: all(`SELECT h.*, u.first_name, u.last_name
-                          FROM community_status_history h
-                          LEFT JOIN users u ON u.id = h.changed_by
-                         WHERE h.community_id = ? ORDER BY h.created_at DESC LIMIT 20`, community.id),
+    statusHistory: statusHistory(community.id),
   });
 });
 
@@ -156,15 +167,22 @@ router.patch('/:id', requirePermission('customers.edit','communities.edit'), (re
   if (!c) return res.status(404).json({ error: 'Community not found.' });
   const b = req.body || {};
 
-  // Activation has its own endpoint because it has preconditions.
-  if (b.status === 'active' && c.status !== 'active') {
+  /* Editing details and changing the service lifecycle are different jobs.
+     Status only ever moves through the lifecycle engine, where the valid
+     actions, the effective date and the reason are all checked and logged. */
+  if (b.status && b.status !== c.status) {
     return res.status(400).json({
-      error: 'Use the activate endpoint to start service — it checks routes and schedules first.',
-      activateUrl: `/api/communities/${c.id}/activate`,
+      error: 'Service status is changed through Manage Community, not by editing details.',
+      code: 'USE_LIFECYCLE',
+      lifecycleUrl: `/api/communities/${c.id}/lifecycle`,
+      actionsUrl: `/api/communities/${c.id}/actions`,
     });
   }
-  if (b.status && !COMMUNITY_STATUS.includes(b.status)) {
-    return res.status(400).json({ error: 'Unknown status.' });
+  if (c.status === 'archived') {
+    return res.status(409).json({
+      error: 'This community is archived. Restore it before editing its details.',
+      code: 'ARCHIVED',
+    });
   }
 
   // Structural fields are locked once the property has real history.
@@ -184,7 +202,7 @@ router.patch('/:id', requirePermission('customers.edit','communities.edit'), (re
          street = COALESCE(?, street), city = COALESCE(?, city),
          state = COALESCE(?, state), zip = COALESCE(?, zip),
          contact_name = COALESCE(?, contact_name), contact_phone = COALESCE(?, contact_phone),
-         contact_email = COALESCE(?, contact_email), status = COALESCE(?, status),
+         contact_email = COALESCE(?, contact_email),
          waiting_reason = COALESCE(?, waiting_reason),
          unit_count_estimate = COALESCE(?, unit_count_estimate),
          potential_customers = COALESCE(?, potential_customers),
@@ -198,102 +216,213 @@ router.patch('/:id', requirePermission('customers.edit','communities.edit'), (re
        WHERE id = ?`,
       b.name ?? null, b.kind ?? null, b.street ?? null, b.city ?? null, b.state ?? null,
       b.zip ?? null, b.contactName ?? null, b.contactPhone ?? null, b.contactEmail ?? null,
-      b.status ?? null, b.waitingReason ?? null, b.unitCountEstimate ?? null,
+      b.waitingReason ?? null, b.unitCountEstimate ?? null,
       b.potentialCustomers ?? null, b.tentativeStartDate ?? null, b.actualStartDate ?? null,
       b.serviceStartTime ?? null, b.serviceInstructions ?? null, b.accessInstructions ?? null,
       b.pricingNote ?? null, b.notes ?? null, c.id);
 
-  if (b.status && b.status !== c.status) {
-    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
-         VALUES (?, ?, ?, ?, ?)`, c.id, c.status, b.status, req.user.id, b.statusNote ?? null);
+  /* Pickup days, route and driver are operational settings, so they are
+     editable here — each one effective-dated rather than overwritten. */
+  const effective = b.daysEffectiveDate || today();
+  let scheduleChanged = null;
+  if (Array.isArray(b.days)) {
+    const before = all(`SELECT day_of_week FROM pickup_schedules
+                         WHERE community_id = ? AND active = 1`, c.id).map(r => r.day_of_week);
+    const after = b.days.map(Number).filter(d => d >= 0 && d <= 6);
+    if (before.slice().sort().join() !== after.slice().sort().join()) {
+      tx(() => {
+        run(`UPDATE pickup_schedules SET active = 0, end_date = date(?, '-1 day')
+              WHERE community_id = ? AND active = 1`, effective, c.id);
+        for (const d of after) {
+          run(`INSERT INTO pickup_schedules (community_id, day_of_week, active, effective_date)
+               VALUES (?, ?, 1, ?)`, c.id, d, effective);
+        }
+      });
+      scheduleChanged = { from: before.map(d => DAY_NAMES[d]), to: after.map(d => DAY_NAMES[d]),
+                          effectiveDate: effective };
+    }
+  }
+
+  if (b.routeId) {
+    const exists = one('SELECT id FROM route_stops WHERE route_id = ? AND community_id = ?', b.routeId, c.id);
+    if (!exists) {
+      run(`INSERT INTO route_stops (route_id, community_id, sort_order)
+           VALUES (?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM route_stops WHERE route_id = ?))`,
+          b.routeId, c.id, b.routeId);
+    }
+    if (b.driverEmployeeId) {
+      const current = one(`SELECT employee_id FROM route_assignments
+                            WHERE route_id = ? AND end_date IS NULL`, b.routeId);
+      if (current?.employee_id !== Number(b.driverEmployeeId)) {
+        tx(() => {
+          run(`UPDATE route_assignments SET end_date = date(?, '-1 day')
+                WHERE route_id = ? AND end_date IS NULL`, effective, b.routeId);
+          run(`INSERT INTO route_assignments (route_id, employee_id, effective_date, assigned_by, reason)
+               VALUES (?, ?, ?, ?, 'Assigned from community details')`,
+              b.routeId, b.driverEmployeeId, effective, req.user.id);
+        });
+      }
+    }
   }
 
   audit(req, 'community.updated', {
     entityType: 'community', entityId: c.id,
-    detail: { name: c.name, statusChange: b.status && b.status !== c.status
-              ? { from: c.status, to: b.status } : undefined },
+    detail: { name: c.name, scheduleChanged, routeId: b.routeId ?? undefined },
   });
-  res.json({ ok: true });
+  res.json({ ok: true, scheduleChanged,
+             message: scheduleChanged
+               ? `Saved. New pickup days apply from ${effective}; earlier records are unchanged.`
+               : 'Saved.' });
 });
 
-/* ---------- hold / archive / restore ---------- */
+/* ============================================================
+   Lifecycle: one action at a time.
 
-router.post('/:id/hold', requirePermission('communities.edit'), (req, res) => {
+   The UI asks GET /:id/actions what is valid RIGHT NOW, shows
+   exactly those choices, and posts exactly one of them back to
+   POST /:id/lifecycle. The server re-checks the same rules, so
+   the answer does not depend on what the screen happened to draw.
+   ============================================================ */
+
+/** Options the reactivate form needs: where can this property be serviced from? */
+function lifecycleContext(community, userId) {
+  return {
+    userId,
+    readiness: readiness(community.id),
+    routeOptions: all(`SELECT id, name, day_of_week FROM routes
+                        WHERE status IN ('active','scheduled','draft') ORDER BY day_of_week, name`)
+      .map(r => ({ value: r.id, label: `${r.name} (${DAY_NAMES[r.day_of_week]})` })),
+    driverOptions: all(`SELECT e.id, u.first_name, u.last_name FROM employees e
+                          JOIN users u ON u.id = e.user_id
+                         WHERE e.status = 'active' ORDER BY u.first_name`)
+      .map(e => ({ value: e.id, label: `${e.first_name} ${e.last_name}` })),
+  };
+}
+
+/** Which single lifecycle actions this community's status allows. */
+router.get('/:id/actions', requirePermission('communities.view', 'customers.view'), (req, res) => {
   const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Community not found.' });
-  if (c.status === 'archived') return res.status(400).json({ error: 'That community is archived.' });
 
-  tx(() => {
-    run(`UPDATE communities SET status='on_hold', waiting_reason = ? WHERE id = ?`,
-        req.body?.reason ?? 'On hold', c.id);
-    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
-         VALUES (?, ?, 'on_hold', ?, ?)`, c.id, c.status, req.user.id, req.body?.reason ?? null);
+  const ctx = lifecycleContext(c, req.user.id);
+  const del = deletability('community', c.id, c);
+  const meta = COMMUNITY_STATUSES[c.status] ?? { label: c.status, tone: '' };
+
+  res.json({
+    community: { id: c.id, name: c.name, status: c.status },
+    status: { key: c.status, ...meta, servicing: isServicing(c.status) },
+    readiness: ctx.readiness,
+    actions: availableActions(COMMUNITY_LIFECYCLE, c, ctx),
+    // The Edit Details form needs the same route and driver lists.
+    options: { routes: ctx.routeOptions, drivers: ctx.driverOptions },
+    assigned: {
+      days: all(`SELECT day_of_week FROM pickup_schedules
+                  WHERE community_id = ? AND active = 1`, c.id).map(r => r.day_of_week),
+      routeId: one('SELECT route_id FROM route_stops WHERE community_id = ?', c.id)?.route_id ?? null,
+    },
+    /* Permanent deletion is NOT a lifecycle action — it is only ever
+       offered for a record that has never been used at all. */
+    deletion: { ...del, url: `/api/communities/${c.id}` },
+    statusHistory: statusHistory(c.id),
   });
-  audit(req, 'community.on_hold', { entityType: 'community', entityId: c.id,
-                                    detail: { name: c.name, from: c.status, reason: req.body?.reason ?? null } });
-  res.json({ ok: true, message: 'Service paused. Existing records are unchanged.' });
 });
+
+const statusHistory = (id) => all(`
+  SELECT h.*, u.first_name, u.last_name
+    FROM community_status_history h
+    LEFT JOIN users u ON u.id = h.changed_by
+   WHERE h.community_id = ? ORDER BY h.created_at DESC, h.id DESC LIMIT 50`, id)
+  .map(h => ({
+    ...h,
+    fromLabel: COMMUNITY_STATUSES[h.from_status]?.label ?? h.from_status ?? 'New',
+    toLabel: COMMUNITY_STATUSES[h.to_status]?.label ?? h.to_status,
+  }));
+
+/** Perform exactly one lifecycle action. */
+export function performLifecycle(req, res, actionKey, input) {
+  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  if (!c) return res.status(404).json({ error: 'Community not found.' });
+
+  const ctx = { ...lifecycleContext(c, req.user.id), input };
+  let resolved;
+  try {
+    resolved = resolveAction(COMMUNITY_LIFECYCLE, c, actionKey, input, ctx);
+  } catch (err) {
+    return res.status(err.status ?? 400).json({
+      error: err.message, code: err.code,
+      currentStatus: err.currentStatus, field: err.field, checks: err.checks,
+    });
+  }
+
+  const { action, values, from, to } = resolved;
+  const result = tx(() => {
+    const out = action.run(c, values, ctx) ?? {};
+    // Every lifecycle change is written down, including one that leaves
+    // the status alone (moving a planned start date, for instance).
+    run(`INSERT INTO community_status_history
+           (community_id, from_status, to_status, changed_by, action,
+            effective_date, reason, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        c.id, from, to, req.user.id, actionKey,
+        values.effectiveDate ?? null, values.reason ?? null,
+        values.notes ?? out.message ?? null);
+    return out;
+  });
+
+  audit(req, `community.${actionKey}`, {
+    entityType: 'community', entityId: c.id,
+    detail: { name: c.name, from, to, effectiveDate: values.effectiveDate ?? null,
+              reason: values.reason ?? null, forced: input.force === true },
+  });
+
+  res.json({
+    ok: true, action: actionKey, from, to,
+    statusLabel: COMMUNITY_STATUSES[to]?.label ?? to,
+    ...result,
+  });
+}
+
+router.post('/:id/lifecycle', requirePermission('communities.edit', 'customers.edit'), (req, res) => {
+  const b = req.body || {};
+  const actionKey = b.action;
+  if (!actionKey) return res.status(400).json({ error: 'Choose one action to perform.' });
+  // One action per request, by construction: there is nowhere to put a second.
+  if (Array.isArray(actionKey)) {
+    return res.status(400).json({ error: 'Only one lifecycle action can be performed at a time.' });
+  }
+  if (actionKey === 'archive' && !hasArchivePermission(req)) {
+    return res.status(404).json({ error: 'Not found.' });
+  }
+  return performLifecycle(req, res, actionKey, b);
+});
+
+const hasArchivePermission = (req) =>
+  req.user?.role === 'admin' ||
+  one(`SELECT allowed FROM role_permissions
+        WHERE role_key = ? AND permission = 'communities.archive'`, req.user?.role)?.allowed === 1;
+
+/* ---------- the old single-purpose endpoints, kept working ----------
+   They now go through the same engine, so an older client cannot take
+   a path that skips the checks. */
+
+const delegate = (actionKey, mapBody = (b) => b) => (req, res) =>
+  performLifecycle(req, res, actionKey, mapBody(req.body || {}));
+
+router.post('/:id/hold', requirePermission('communities.edit'),
+  delegate('hold', (b) => ({ ...b, effectiveDate: b.effectiveDate || today(),
+                             reason: b.reason || 'other', notes: b.notes ?? b.reason ?? null })));
 
 router.post('/:id/reactivate', requirePermission('communities.edit'), (req, res) => {
-  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
+  const c = one('SELECT status FROM communities WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Community not found.' });
-  if (!['on_hold', 'paused', 'inactive'].includes(c.status)) {
-    return res.status(400).json({ error: `Cannot reactivate from "${c.status}".` });
-  }
-  tx(() => {
-    run(`UPDATE communities SET status='active', waiting_reason = NULL WHERE id = ?`, c.id);
-    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
-         VALUES (?, ?, 'active', ?, 'Reactivated')`, c.id, c.status, req.user.id);
-  });
-  audit(req, 'community.reactivated', { entityType: 'community', entityId: c.id,
-                                        detail: { name: c.name, from: c.status } });
-  res.json({ ok: true });
+  const b = req.body || {};
+  // on hold → resume; cancelled → reactivate (which needs a full setup).
+  const action = ['on_hold', 'paused'].includes(c.status) ? 'resume' : 'reactivate';
+  return performLifecycle(req, res, action, { ...b, effectiveDate: b.effectiveDate || today() });
 });
 
-/** Archive, never delete. Everything historical stays queryable. */
-router.post('/:id/archive', requirePermission('communities.archive'), (req, res) => {
-  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
-  if (!c) return res.status(404).json({ error: 'Community not found.' });
-  if (c.status === 'archived') return res.status(400).json({ error: 'Already archived.' });
-
-  const counts = one(`
-    SELECT (SELECT COUNT(*) FROM units WHERE community_id = ?) AS units,
-           (SELECT COUNT(*) FROM units u JOIN pickup_records pr ON pr.unit_id = u.id
-             WHERE u.community_id = ?) AS pickups,
-           (SELECT COUNT(*) FROM units u JOIN service_addresses sa ON sa.unit_id = u.id
-             WHERE u.community_id = ?) AS customers`, c.id, c.id, c.id);
-
-  tx(() => {
-    run(`UPDATE communities SET status='archived', archived_at = datetime('now') WHERE id = ?`, c.id);
-    // Stop future scheduling without touching what already happened.
-    run(`UPDATE pickup_schedules SET active = 0, end_date = date('now')
-          WHERE community_id = ? AND active = 1`, c.id);
-    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
-         VALUES (?, ?, 'archived', ?, ?)`, c.id, c.status, req.user.id, req.body?.note ?? null);
-  });
-
-  audit(req, 'community.archived', {
-    entityType: 'community', entityId: c.id,
-    detail: { name: c.name, from: c.status, preserved: counts },
-  });
-  res.json({
-    ok: true, preserved: counts,
-    message: `Archived. ${counts.pickups} pickup record(s) and ${counts.customers} customer link(s) remain in history.`,
-  });
-});
-
-router.post('/:id/restore', requirePermission('communities.archive'), (req, res) => {
-  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
-  if (!c) return res.status(404).json({ error: 'Community not found.' });
-  if (c.status !== 'archived') return res.status(400).json({ error: 'That community is not archived.' });
-  tx(() => {
-    run(`UPDATE communities SET status='inactive', archived_at = NULL WHERE id = ?`, c.id);
-    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
-         VALUES (?, 'archived', 'inactive', ?, 'Restored from archive')`, c.id, req.user.id);
-  });
-  audit(req, 'community.restored', { entityType: 'community', entityId: c.id, detail: { name: c.name } });
-  res.json({ ok: true, status: 'inactive' });
-});
+router.post('/:id/archive', requirePermission('communities.archive'), delegate('archive'));
+router.post('/:id/restore', requirePermission('communities.archive'), delegate('restore'));
 
 /**
  * Change service days with an effective date. The old schedule is closed
@@ -331,25 +460,6 @@ router.put('/:id/schedule', requirePermission('communities.schedule.edit'), (req
 
 /* ---------- readiness + activation ---------- */
 
-/** What still has to be true before this property can be serviced. */
-function readiness(communityId) {
-  const schedule = all('SELECT day_of_week FROM pickup_schedules WHERE community_id = ? AND active = 1', communityId);
-  const stops = all('SELECT route_id FROM route_stops WHERE community_id = ?', communityId);
-  const drivers = stops.length ? all(`
-    SELECT ra.employee_id FROM route_assignments ra
-     WHERE ra.route_id IN (${stops.map(() => '?').join(',')}) AND ra.end_date IS NULL`,
-    ...stops.map(s => s.route_id)) : [];
-  const units = one('SELECT COUNT(*) AS n FROM units WHERE community_id = ? AND status=\'active\'', communityId).n;
-
-  const checks = [
-    { key: 'schedule', ok: schedule.length > 0, label: 'Pickup days configured' },
-    { key: 'route', ok: stops.length > 0, label: 'On at least one route' },
-    { key: 'driver', ok: drivers.length > 0, label: 'A driver is assigned to that route' },
-    { key: 'units', ok: units > 0, label: 'Units exist for the property' },
-  ];
-  return { checks, ready: checks.every(c => c.ok) };
-}
-
 router.get('/:id/readiness', requirePermission('customers.view','communities.view'), (req, res) => {
   const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
   if (!c) return res.status(404).json({ error: 'Community not found.' });
@@ -357,44 +467,11 @@ router.get('/:id/readiness', requirePermission('customers.view','communities.vie
 });
 
 /** Activation is deliberate and checked — never a side effect of an edit. */
-router.post('/:id/activate', requirePermission('customers.edit','communities.edit'), (req, res) => {
-  const c = one('SELECT * FROM communities WHERE id = ?', req.params.id);
-  if (!c) return res.status(404).json({ error: 'Community not found.' });
-  if (c.status === 'active') return res.status(400).json({ error: 'That community is already active.' });
-
-  const { actualStartDate, force, note } = req.body || {};
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(actualStartDate || '')) {
-    return res.status(400).json({ error: 'An actual start date (YYYY-MM-DD) is required.' });
-  }
-
-  const check = readiness(c.id);
-  if (!check.ready && !force) {
-    return res.status(409).json({
-      error: 'This community is not ready to start service.',
-      checks: check.checks,
-      hint: 'Fix the failing items, or pass force:true to activate anyway.',
-    });
-  }
-
-  tx(() => {
-    run(`UPDATE communities SET status='active', actual_start_date = ?, waiting_reason = NULL
-          WHERE id = ?`, actualStartDate, c.id);
-    run(`INSERT INTO community_status_history (community_id, from_status, to_status, changed_by, note)
-         VALUES (?, ?, 'active', ?, ?)`, c.id, c.status, req.user.id,
-        note ?? `Service started ${actualStartDate}`);
-    // Everyone waiting is marked notified; conversion is still a manual step.
-    run(`UPDATE community_waitlist SET status='notified', notified_at = datetime('now')
-          WHERE community_id = ? AND status = 'waiting'`, c.id);
+router.post('/:id/activate', requirePermission('customers.edit', 'communities.edit'), (req, res) => {
+  const b = req.body || {};
+  return performLifecycle(req, res, 'activate', {
+    ...b, effectiveDate: b.effectiveDate || b.actualStartDate, notes: b.note ?? b.notes,
   });
-
-  audit(req, 'community.activated', {
-    entityType: 'community', entityId: c.id,
-    detail: { name: c.name, from: c.status, actualStartDate, forced: Boolean(force) },
-  });
-
-  const waiting = one(`SELECT COUNT(*) AS n FROM community_waitlist
-                        WHERE community_id = ? AND status='notified'`, c.id).n;
-  res.json({ ok: true, actualStartDate, waitlistNotified: waiting });
 });
 
 /* ---------- driver-needed board ---------- */

@@ -17,7 +17,8 @@ const money = (cents) => cents / 100;
 function myAddress(customerId) {
   return one(`
     SELECT un.id AS unit_id, un.label, un.street, un.zip,
-           b.name AS building, com.id AS community_id, com.name AS community
+           b.name AS building, com.id AS community_id, com.name AS community,
+           com.status AS community_status, com.hold_effective_date, com.cancelled_effective_date
       FROM service_addresses sa
       JOIN units un ON un.id = sa.unit_id
       LEFT JOIN buildings b ON b.id = un.building_id
@@ -45,9 +46,31 @@ function nextPickupDate(days) {
 
 /* ---------- Account overview ---------- */
 
+/* When a property's service is paused or ended there are no pickup days,
+   and "no pickup days" on its own reads like a bug. Say what is going on. */
+function serviceNotice(address) {
+  if (!address?.community_status) return null;
+  if (address.community_status === 'on_hold' || address.community_status === 'paused') {
+    return { state: 'on_hold',
+             message: `Pickups at ${address.community} are temporarily paused` +
+               (address.hold_effective_date ? ` from ${address.hold_effective_date}` : '') +
+               '. We will let you know as soon as service resumes.' };
+  }
+  if (address.community_status === 'inactive') {
+    return { state: 'cancelled',
+             message: `We are no longer servicing ${address.community}` +
+               (address.cancelled_effective_date ? ` as of ${address.cancelled_effective_date}` : '') + '.' };
+  }
+  if (address.community_status === 'archived') {
+    return { state: 'cancelled', message: `We are no longer servicing ${address.community}.` };
+  }
+  return null;
+}
+
 router.get('/account', (req, res) => {
   const address = myAddress(req.customer.id);
   const days = myScheduleDays(address);
+  const notice = serviceNotice(address);
 
   const subscription = one(`
     SELECT s.*, p.code AS plan_code, p.name AS plan_name, p.interval_months
@@ -62,7 +85,8 @@ router.get('/account', (req, res) => {
     },
     account: { status: req.customer.status, isIntro: Boolean(req.customer.is_intro) },
     address,
-    schedule: { days, dayNames: days.map(d => DAY_NAMES[d]), nextPickup: nextPickupDate(days) },
+    schedule: { days, dayNames: days.map(d => DAY_NAMES[d]), nextPickup: nextPickupDate(days),
+                notice },
     subscription: subscription && {
       plan: subscription.plan_name,
       planCode: subscription.plan_code,

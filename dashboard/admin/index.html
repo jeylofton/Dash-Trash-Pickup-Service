@@ -75,10 +75,18 @@
 
       <div class="toolbar">
         <div><label for="commStatusFilter">Status</label>
-          <select id="commStatusFilter"><option value="">All statuses</option>
-            <option>lead</option><option>waiting_list</option><option>driver_needed</option>
-            <option>pending_setup</option><option>scheduled</option><option>active</option>
-            <option>paused</option><option>inactive</option></select></div>
+          <select id="commStatusFilter">
+            <option value="">Everyday view (not archived)</option>
+            <option value="lead">Lead</option>
+            <option value="waiting_list">Waiting List</option>
+            <option value="driver_needed">Driver Needed</option>
+            <option value="pending_setup">Pending Setup</option>
+            <option value="scheduled">Scheduled To Start</option>
+            <option value="active">Active</option>
+            <option value="on_hold">On Hold</option>
+            <option value="inactive">Service Cancelled</option>
+            <option value="archived">Archived</option>
+          </select></div>
         <div style="flex:0 0 auto"><button class="btn btn-primary" id="newCommBtn">+ Add community</button></div>
       </div>
 
@@ -390,6 +398,7 @@
         </div>
       </div>
       <div class="card"><div class="table-wrap"><table id="couponTable"></table></div></div>
+      <div class="card" id="couponDetail" hidden></div>
       <div class="chart-grid">
         <div class="card"><div id="chartCouponRedemptions"></div></div>
         <div class="card"><div id="chartNewVsExisting"></div></div>
@@ -397,7 +406,10 @@
         <div class="card"><div id="chartDiscByCoupon"></div></div>
       </div>
       <div class="card" id="redemptionCard" hidden>
-        <h2 id="redemptionTitle">Redemption history</h2>
+        <div class="detail-bar">
+          <h2 id="redemptionTitle" style="margin:0">Redemption history</h2>
+          <button class="btn small" id="redemptionClose">Close</button>
+        </div>
         <div class="table-wrap"><table id="redemptionTable"></table></div>
       </div>
     </section>

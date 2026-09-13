@@ -14,6 +14,15 @@ export const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Fr
 export const dayOfWeek = (isoDate) => new Date(`${isoDate}T12:00:00`).getDay();
 export const today = () => new Date().toISOString().slice(0, 10);
 
+/* A schedule row applies on a date when that date falls inside the row's
+   effective window. Rows are end-dated rather than deleted when service is
+   put on hold or cancelled, so asking about a past date still gives the
+   days that genuinely applied back then. Two `?` placeholders: the date. */
+const SCHEDULE_APPLIES = `
+  (ps.active = 1 OR ps.end_date IS NOT NULL)
+  AND COALESCE(ps.effective_date, '2000-01-01') <= ?
+  AND (ps.end_date IS NULL OR ps.end_date >= ?)`;
+
 /** Units that should be serviced on `date` for a given route. */
 function unitsForRoute(routeId, date) {
   const dow = dayOfWeek(date);
@@ -25,25 +34,29 @@ function unitsForRoute(routeId, date) {
       units.push(...all(
         `SELECT u.id AS unit_id, sa.customer_id
            FROM units u
+           JOIN communities com ON com.id = u.community_id
            JOIN pickup_schedules ps
-             ON ps.community_id = u.community_id AND ps.day_of_week = ? AND ps.active = 1
+             ON ps.community_id = u.community_id AND ps.day_of_week = ?
+            AND ${SCHEDULE_APPLIES}
            LEFT JOIN service_addresses sa
              ON sa.unit_id = u.id AND sa.end_date IS NULL
            JOIN customers c ON c.id = sa.customer_id AND c.status = 'active'
-          WHERE u.community_id = ? AND u.status = 'active'`,
-        dow, stop.community_id
+          WHERE u.community_id = ? AND u.status = 'active'
+            AND com.status != 'archived'`,
+        dow, date, date, stop.community_id
       ));
     } else if (stop.unit_id) {
       units.push(...all(
         `SELECT u.id AS unit_id, sa.customer_id
            FROM units u
            JOIN pickup_schedules ps
-             ON ps.unit_id = u.id AND ps.day_of_week = ? AND ps.active = 1
+             ON ps.unit_id = u.id AND ps.day_of_week = ?
+            AND ${SCHEDULE_APPLIES}
            LEFT JOIN service_addresses sa
              ON sa.unit_id = u.id AND sa.end_date IS NULL
            JOIN customers c ON c.id = sa.customer_id AND c.status = 'active'
           WHERE u.id = ? AND u.status = 'active'`,
-        dow, stop.unit_id
+        dow, date, date, stop.unit_id
       ));
     }
   }

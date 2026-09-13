@@ -1,6 +1,54 @@
 import { api, $, $$, esc, money, fmtDate, fmtTime, statusPill, ISSUE_LABELS, mountShell, wireTabs } from '/dashboard/dash.js';
 import { lineChart, barChart, statusChip, SERIES } from '/dashboard/charts.js';
-import { guardForm, confirmLeave, renderDeleteControl } from '/dashboard/dash.js';
+import { guardForm, anyDirty, renderDeleteControl, lifecycleControl,
+         createSection, confirmDiscard, toast } from '/dashboard/dash.js';
+
+/* ============================================================
+   Page state
+
+   Every management tab obeys the same rule: LIST → SELECT →
+   VIEW/EDIT → SAVE OR CANCEL → LIST. Save writes to the server;
+   Cancel writes nothing at all; leaving and coming back always
+   lands on the plain list with nothing selected.
+
+   Each section below owns which record is open. Nothing else in
+   this file is allowed to remember a selection across tabs.
+   ============================================================ */
+
+const sections = {
+  communities: createSection({ detail: '#commDetail' }),
+  routes:      createSection({ detail: '#routeDetail' }),
+  roles:       createSection({ detail: '#roleDetail' }),
+  employees:   createSection({ detail: '#empDetailView', list: '#empListView' }),
+  coupons:     createSection({ detail: '#couponDetail' }),
+};
+
+/* The Add/New forms are drafts too: an abandoned one must not be
+   waiting, half-filled, the next time the tab is opened. */
+const CREATE_CARDS = ['#newCommCard', '#newRouteCard', '#newRoleCard', '#newEmpCard', '#newCouponForm'];
+const createGuards = new Map();
+
+function resetCreateForm(sel) {
+  const card = $(sel);
+  if (!card) return;
+  $$('input, select, textarea', card).forEach(f => {
+    if (f.tagName === 'SELECT') f.selectedIndex = 0;
+    else if (f.type === 'checkbox' || f.type === 'radio') f.checked = false;
+    else if (f.type !== 'date') f.value = '';
+  });
+  $$('.msg', card).forEach(m => { m.hidden = true; });
+  delete $('#nrlKey')?.dataset.touched;
+  card.hidden = true;
+  createGuards.get(sel)?.snapshot();
+}
+
+/** The clean state every page returns to: no selection, no open form. */
+function resetPageState() {
+  Object.values(sections).forEach(sec => sec.reset());
+  CREATE_CARDS.forEach(resetCreateForm);
+  const redemptions = $('#redemptionCard');
+  if (redemptions) redemptions.hidden = true;
+}
 
 await mountShell('admin');
 
@@ -65,9 +113,15 @@ async function loadCustomers() {
 /* ---------- communities ---------- */
 const COMM_PILL = {
   active:'ok', scheduled:'pending', driver_needed:'bad', waiting_list:'warn',
-  pending_setup:'warn', lead:'', paused:'warn', inactive:'',
+  pending_setup:'warn', lead:'', on_hold:'warn', paused:'warn', inactive:'bad', archived:'',
 };
-const commStatus = (st) => `<span class="pill ${COMM_PILL[st] ?? ''}">${esc(String(st).replace(/_/g,' '))}</span>`;
+const COMM_LABEL = {
+  lead:'Lead', waiting_list:'Waiting List', driver_needed:'Driver Needed',
+  pending_setup:'Pending Setup', scheduled:'Scheduled To Start', active:'Active',
+  on_hold:'On Hold', paused:'On Hold', inactive:'Service Cancelled', archived:'Archived',
+};
+const commStatus = (st) =>
+  `<span class="pill ${COMM_PILL[st] ?? ''}">${esc(COMM_LABEL[st] ?? String(st).replace(/_/g,' '))}</span>`;
 
 async function loadCommunities() {
   const params = new URLSearchParams();
@@ -105,43 +159,76 @@ async function loadCommunities() {
       <td><button class="btn small" data-comm="${c.id}">Open</button></td>
     </tr>`).join(''));
 
+  /* Only one record is ever open. Switching to another discards nothing
+     silently — if a draft is in progress the admin is asked first. */
   $$('#commTable [data-comm]').forEach(b =>
-    b.addEventListener('click', () => showCommunity(b.dataset.comm)));
+    b.addEventListener('click', async () => {
+      if (await sections.communities.canSwitchTo(b.dataset.comm)) showCommunity(b.dataset.comm);
+    }));
 }
 
+const SETUP_STATUSES = new Set(['lead','waiting_list','driver_needed','pending_setup','scheduled','inactive']);
+const DAY_NAMES_UI = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+/* The community detail page answers, in one place: where does this
+   property stand, and what may I do about it? Every lifecycle action
+   lives behind one Manage Community control, so there is never a row of
+   competing Hold / Cancel / Archive buttons to misclick. */
 async function showCommunity(id) {
-  const [d, readiness] = await Promise.all([
+  const [d, lc] = await Promise.all([
     api(`/api/communities/${id}`),
-    api(`/api/communities/${id}/readiness`),
+    api(`/api/communities/${id}/actions`),
   ]);
   const c = d.community;
   const box = $('#commDetail');
   box.hidden = false;
+  sections.communities.select(id);
+
+  const held = c.heldDays?.length ? c.heldDays.join(' & ') : null;
 
   box.innerHTML = `
-    <h2>${esc(c.name)} ${commStatus(c.status)}</h2>
-    <p class="muted small">${esc([c.street, c.city, c.state, c.zip].filter(Boolean).join(', '))}
-      ${c.contact_name ? ` · Manager: ${esc(c.contact_name)}` : ''}
-      ${c.contact_phone ? ` · ${esc(c.contact_phone)}` : ''}</p>
+    <div class="detail-bar">
+      <button class="btn-back" id="commBack">&larr; Back to Communities</button>
+    </div>
+    <div class="comm-head">
+      <div>
+        <h2>${esc(c.name)} ${commStatus(c.status)}</h2>
+        <p class="muted small">${esc([c.street, c.city, c.state, c.zip].filter(Boolean).join(', '))}
+          ${c.contact_name ? ` · Manager: ${esc(c.contact_name)}` : ''}
+          ${c.contact_phone ? ` · ${esc(c.contact_phone)}` : ''}</p>
+        <p class="small">${esc(c.statusDescription || '')}</p>
+      </div>
+      <div class="comm-actions">
+        <button class="btn btn-primary" id="manageBtn" aria-expanded="false">Manage Community ▾</button>
+        <div class="menu" id="manageMenu" hidden>
+          <button class="menu-item" data-manage="edit">Edit Details</button>
+          <button class="menu-item" data-manage="status">Change Service Status</button>
+          <button class="menu-item" data-manage="history">View Status History</button>
+        </div>
+      </div>
+    </div>
 
-    ${c.status !== 'active' ? `
+    <div class="comm-facts">
+      <div><span>Servicing since</span><strong>${c.actual_start_date ? fmtDate(c.actual_start_date) : '—'}</strong></div>
+      <div><span>Tentative start</span><strong>${c.tentative_start_date ? fmtDate(c.tentative_start_date) : '—'}</strong></div>
+      <div><span>Pickup days</span><strong>${esc(d.schedule.map(x => x.name).join(' & ') || '—')}</strong></div>
+      ${c.hold_effective_date ? `<div><span>On hold since</span><strong>${fmtDate(c.hold_effective_date)}</strong></div>` : ''}
+      ${held ? `<div><span>Days held</span><strong>${esc(held)}</strong></div>` : ''}
+      ${c.cancelled_effective_date ? `<div><span>Cancelled effective</span><strong>${fmtDate(c.cancelled_effective_date)}</strong></div>` : ''}
+      ${c.waiting_reason ? `<div><span>Reason</span><strong>${esc(c.waiting_reason)}</strong></div>` : ''}
+    </div>
+
+    ${/* Readiness only matters while a property is being got ready. An
+          on-hold property already has a setup — Resume puts it back. */
+      lc.readiness.ready || !SETUP_STATUSES.has(c.status) ? '' : `
       <div class="card" style="background:var(--sand)">
-        <h3>Start service</h3>
-        <p class="small">${c.tentative_start_date
-          ? `Tentative start <strong>${fmtDate(c.tentative_start_date)}</strong> — tentative only; it does not activate anything.`
-          : 'No tentative start date set.'}</p>
-        <div style="margin:10px 0">
-          ${readiness.checks.map(ck =>
-            `<div class="small">${ck.ok ? '✅' : '⬜'} ${esc(ck.label)}</div>`).join('')}
-        </div>
-        <div class="row">
-          <div><label for="actualStart">Actual start date</label><input id="actualStart" type="date" /></div>
-          <div style="flex:0 0 auto"><button class="btn btn-primary" id="activateBtn"
-            ${readiness.ready ? '' : 'title="Some checks are not met"'}>Activate community</button></div>
-        </div>
-        <p class="msg" id="activateMsg" hidden></p>
-      </div>` : `
-      <p class="small">Servicing since <strong>${c.actual_start_date ? fmtDate(c.actual_start_date) : '—'}</strong>.</p>`}
+        <h3>Not ready for service yet</h3>
+        <p class="small">These have to be true before service can start:</p>
+        ${lc.readiness.checks.map(ck => `<div class="small">${ck.ok ? '✅' : '⬜'} ${esc(ck.label)}
+          ${ck.ok ? '' : `<span class="muted">— ${esc(ck.fix)}</span>`}</div>`).join('')}
+      </div>`}
+
+    <div id="commWorkZone"></div>
 
     <div class="chart-grid" style="margin-top:14px">
       <div class="card">
@@ -159,14 +246,12 @@ async function showCommunity(id) {
         ${d.routes.length ? d.routes.map(r => `<div class="small">• ${esc(r.name)} (${esc(r.dayName)})
           — ${r.first_name ? esc(r.first_name) + ' ' + esc(r.last_name) : '<span class="pill bad">no driver</span>'}</div>`).join('')
           : '<p class="muted small">Not on any route.</p>'}
-        <h3 style="margin-top:12px">Status history</h3>
-        ${d.statusHistory.map(h => `<div class="small muted">${fmtDate(h.created_at)}:
-          ${esc(h.from_status || 'new')} → <strong>${esc(h.to_status)}</strong>
-          ${h.note ? '· ' + esc(h.note) : ''}</div>`).join('')}
+        <h3 style="margin-top:12px">Recent status changes</h3>
+        ${d.statusHistory.slice(0, 5).map(h => `<div class="small muted">${fmtDate(h.created_at)}:
+          ${esc(h.fromLabel)} → <strong>${esc(h.toLabel)}</strong></div>`).join('')
+          || '<p class="muted small">No changes yet.</p>'}
       </div>
     </div>
-
-    <div id="commDeleteZone"></div>
 
     <div class="card">
       <h3>Units (${d.units.length})</h3>
@@ -180,48 +265,189 @@ async function showCommunity(id) {
         </tr>`).join(''))}</table></div>
     </div>`;
 
-  renderDeleteControl('#commDeleteZone', {
-    checkUrl: `/api/communities/${id}/deletable`,
-    deleteUrl: `/api/communities/${id}`,
-    label: 'community',
-    onDeleted: () => { $('#commDetail').hidden = true; loadCommunities(); },
-  });
+  /* ---- the one control ---- */
+  const menu = $('#manageMenu');
+  const manageBtn = $('#manageBtn');
+  const toggleMenu = (open) => {
+    menu.hidden = open === undefined ? !menu.hidden : !open;
+    manageBtn.setAttribute('aria-expanded', String(!menu.hidden));
+  };
+  manageBtn.addEventListener('click', (e) => { e.stopPropagation(); toggleMenu(); });
+  document.addEventListener('click', () => toggleMenu(false), { once: true });
 
-  const btn = $('#activateBtn');
-  if (btn) btn.addEventListener('click', async () => {
-    const msg = $('#activateMsg');
-    const date = $('#actualStart').value;
-    if (!date) { msg.textContent = 'Choose an actual start date.'; msg.className = 'msg error'; msg.hidden = false; return; }
-    if (!confirm(`Start service at ${c.name} on ${date}? This begins real pickups.`)) return;
-    try {
-      const r = await api(`/api/communities/${id}/activate`, {
-        method: 'POST', body: JSON.stringify({ actualStartDate: date }),
-      });
-      msg.textContent = `Activated. ${r.waitlistNotified} waiting-list contact(s) marked notified.`;
-      msg.className = 'msg ok'; msg.hidden = false;
-      loadCommunities(); setTimeout(() => showCommunity(id), 800);
-    } catch (e) {
-      if (e.status === 409) {
-        if (!confirm('Some readiness checks are not met. Activate anyway?')) return;
-        await api(`/api/communities/${id}/activate`, {
-          method: 'POST', body: JSON.stringify({ actualStartDate: date, force: true }),
-        });
-        loadCommunities(); showCommunity(id);
-      } else { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
-    }
-  });
+  const zone = $('#commWorkZone');
+  /* Save/Cancel/Back all end in the same clean place. The only difference
+     is whether anything was written on the way. */
+  const backToList = async ({ force = false } = {}) => {
+    if (await sections.communities.close({ force })) await loadCommunities();
+  };
+  $('#commBack').addEventListener('click', () => backToList());
+
+  $$('[data-manage]').forEach(b => b.addEventListener('click', () => {
+    toggleMenu(false);
+    if (b.dataset.manage === 'edit')    return showCommunityEdit(id, d, lc, zone, backToList);
+    if (b.dataset.manage === 'history') return showCommunityHistory(d, zone);
+    /* Change Service Status: one valid action at a time, chosen, confirmed
+       and recorded by the shared lifecycle control. */
+    return lifecycleControl(zone, {
+      actionsUrl: `/api/communities/${id}/actions`,
+      submitUrl:  `/api/communities/${id}/lifecycle`,
+      label: 'community',
+      onDone: async (res, action) => {
+        if (action === 'closed') { zone.innerHTML = ''; return; }
+        toast(action === '__delete__'
+          ? `${c.name} was permanently deleted.`
+          : res?.message || 'Status updated.');
+        await backToList({ force: true });
+      },
+    });
+  }));
+
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+/* ---------- edit details (never touches the service status) ----------
+   The form holds a DRAFT: the inputs are seeded from the saved record and
+   nothing leaves this card until Save succeeds. Cancel simply throws the
+   card away, so no request, no audit entry and no effective date is ever
+   produced by an abandoned edit. */
+function showCommunityEdit(id, d, lc, zone, backToList) {
+  const c = d.community;
+  const days = new Set(lc.assigned.days);
+  const opt = (list, sel) => list.map(o =>
+    `<option value="${esc(o.value)}" ${String(o.value) === String(sel) ? 'selected' : ''}>${esc(o.label)}</option>`).join('');
+
+  zone.innerHTML = `
+    <div class="card" id="commEditCard">
+      <h3>Edit details — ${esc(c.name)}</h3>
+      <p class="small muted">Operational details only. The service status is changed under
+        <strong>Change Service Status</strong>, so an edit can never start or stop service by accident.</p>
+      <div class="row">
+        <div><label>Property manager</label><input id="ceContact" value="${esc(c.contact_name || '')}" /></div>
+        <div><label>Manager phone</label><input id="cePhone" value="${esc(c.contact_phone || '')}" /></div>
+        <div><label>Manager email</label><input id="ceEmail" type="email" value="${esc(c.contact_email || '')}" /></div>
+      </div>
+      <div class="row">
+        <div><label>Tentative start date</label><input id="ceTentative" type="date" value="${esc(c.tentative_start_date || '')}" /></div>
+        <div><label>Actual start date</label><input id="ceActual" type="date" value="${esc(c.actual_start_date || '')}"
+          ${c.isServicing ? '' : 'disabled title="Set when service is activated."'} /></div>
+        <div><label>Service start time</label><input id="ceStartTime" type="time" value="${esc(c.service_start_time || '')}" /></div>
+      </div>
+      <div class="row">
+        <div><label>Assigned route</label><select id="ceRoute">
+          <option value="">Not assigned</option>${opt(lc.options.routes, lc.assigned.routeId)}</select></div>
+        <div><label>Assigned driver</label><select id="ceDriver">
+          <option value="">Leave as is</option>${opt(lc.options.drivers, '')}</select></div>
+        <div><label>Changes effective</label><input id="ceEffective" type="date"
+          value="${new Date().toISOString().slice(0,10)}" /></div>
+      </div>
+      <div class="lc-field"><span class="lc-label">Pickup days</span>
+        <div class="lc-days">${DAY_NAMES_UI.map((dn, i) =>
+          `<label class="lc-day"><input type="checkbox" data-day value="${i}"
+            ${days.has(i) ? 'checked' : ''} /> ${dn.slice(0,3)}</label>`).join('')}</div>
+        <span class="small muted">A day change applies from the effective date. Earlier pickups are untouched.</span>
+      </div>
+      <div class="row">
+        <div><label>Community pricing note</label><input id="cePricing" value="${esc(c.pricing_note || '')}" /></div>
+      </div>
+      <div><label>Access instructions</label><textarea id="ceAccess" rows="2">${esc(c.access_instructions || '')}</textarea></div>
+      <div><label>Operational notes</label><textarea id="ceNotes" rows="2">${esc(c.notes || '')}</textarea></div>
+      <p class="msg" id="ceMsg" hidden></p>
+      <div class="form-actions-bar">
+        <button class="btn btn-primary" id="ceSave">Save changes</button>
+        <button class="btn" id="ceCancel">Cancel</button>
+      </div>
+    </div>`;
+
+  const guard = sections.communities.track(guardForm('#commEditCard'));
+
+  $('#ceCancel').addEventListener('click', async () => {
+    // Nothing was sent while typing, so cancelling is simply forgetting.
+    if (guard.isDirty() && !(await confirmDiscard())) return;
+    guard.restore();
+    zone.innerHTML = '';
+    await backToList({ force: true });
+  });
+
+  $('#ceSave').addEventListener('click', async () => {
+    const msg = $('#ceMsg');
+    try {
+      const res = await api(`/api/communities/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          contactName: $('#ceContact').value || undefined,
+          contactPhone: $('#cePhone').value || undefined,
+          contactEmail: $('#ceEmail').value || undefined,
+          tentativeStartDate: $('#ceTentative').value || undefined,
+          actualStartDate: $('#ceActual').disabled ? undefined : ($('#ceActual').value || undefined),
+          serviceStartTime: $('#ceStartTime').value || undefined,
+          pricingNote: $('#cePricing').value || undefined,
+          accessInstructions: $('#ceAccess').value || undefined,
+          notes: $('#ceNotes').value || undefined,
+          days: $$('#commEditCard [data-day]:checked').map(i => Number(i.value)),
+          daysEffectiveDate: $('#ceEffective').value || undefined,
+          routeId: $('#ceRoute').value ? Number($('#ceRoute').value) : undefined,
+          driverEmployeeId: $('#ceDriver').value ? Number($('#ceDriver').value) : undefined,
+        }),
+      });
+      // Saved: the draft is now the record, so the guard has nothing to protect.
+      guard.snapshot();
+      toast(res.message || 'Community updated successfully.');
+      await backToList({ force: true });
+    } catch (e) {
+      /* A failed save keeps the draft on screen — losing what was typed
+         because the network blinked would be its own bug. */
+      msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false;
+      msg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+}
+
+/* ---------- status history ---------- */
+function showCommunityHistory(d, zone) {
+  zone.innerHTML = `
+    <div class="card">
+      <h3>Status history</h3>
+      ${d.statusHistory.length ? `<div class="table-wrap"><table>${table(
+        ['Changed', 'Change', 'Effective', 'Reason', 'By', 'Notes'],
+        d.statusHistory.map(h => `<tr>
+          <td class="small">${fmtDate(h.created_at)}</td>
+          <td class="small">${esc(h.fromLabel)} → <strong>${esc(h.toLabel)}</strong></td>
+          <td class="small">${h.effective_date ? fmtDate(h.effective_date) : '—'}</td>
+          <td class="small">${esc(String(h.reason || '—').replace(/_/g, ' '))}</td>
+          <td class="small">${esc([h.first_name, h.last_name].filter(Boolean).join(' ') || 'system')}</td>
+          <td class="small muted">${esc(h.note || '')}</td>
+        </tr>`).join(''))}</table></div>`
+        : '<p class="muted small">No status changes recorded yet.</p>'}
+      <p class="small muted">Status changes only ever affect future service. Pickups, routes,
+        employee assignments and financial records from earlier periods are never rewritten.</p>
+      <button class="btn" data-lc-close-history>Close</button>
+    </div>`;
+  $('[data-lc-close-history]').addEventListener('click', () => { zone.innerHTML = ''; });
+}
+
 $('#commStatusFilter').addEventListener('change', loadCommunities);
-$('#newCommBtn').addEventListener('click', () => {
-  const c = $('#newCommCard'); c.hidden = !c.hidden;
+createGuards.set('#newCommCard', guardForm('#newCommCard'));
+$('#newCommBtn').addEventListener('click', async () => {
+  const card = $('#newCommCard');
+  if (!card.hidden) return closeCreateForm('#newCommCard');
+  // A create form is its own selection: close whatever record is open first.
+  if (!(await sections.communities.close())) return;
+  card.hidden = false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
-$('#ncoCancel').addEventListener('click', () => {
-  if (!confirmLeave('Discard this unsaved form?')) return;
-  $$('#newCommCard input, #newCommCard select, #newCommCard textarea').forEach(f => { if (f.type !== 'date') f.value = ''; });
-  $('#newCommCard').hidden = true;
-});
+
+/** Cancel on a create form creates nothing and leaves nothing behind. */
+async function closeCreateForm(sel) {
+  const guard = createGuards.get(sel);
+  if (guard?.isDirty() && !(await confirmDiscard({
+    body: 'This record has not been created yet. Your entries will be discarded.',
+  }))) return false;
+  resetCreateForm(sel);
+  return true;
+}
+
+$('#ncoCancel').addEventListener('click', () => closeCreateForm('#newCommCard'));
 $('#ncoSave').addEventListener('click', async () => {
   const msg = $('#ncoMsg');
   try {
@@ -240,10 +466,9 @@ $('#ncoSave').addEventListener('click', async () => {
         waitingReason: $('#ncoReason').value || undefined,
       }),
     });
-    msg.textContent = r.message; msg.className = 'msg ok'; msg.hidden = false;
-    ['ncoName','ncoStreet','ncoZip','ncoContact','ncoPhone','ncoEmail','ncoUnits','ncoPotential','ncoReason']
-      .forEach(i => { $('#' + i).value = ''; });
-    loadCommunities();
+    toast(r.message || 'Community created.');
+    resetCreateForm('#newCommCard');
+    await loadCommunities();
   } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
 });
 
@@ -285,7 +510,9 @@ async function loadRoutes() {
     </tr>`).join(''));
 
   $$('#routeTable [data-route]').forEach(b =>
-    b.addEventListener('click', () => showRoute(b.dataset.route)));
+    b.addEventListener('click', async () => {
+      if (await sections.routes.canSwitchTo(b.dataset.route)) showRoute(b.dataset.route);
+    }));
 }
 
 async function showRoute(id) {
@@ -293,8 +520,12 @@ async function showRoute(id) {
   const r = d.route;
   const box = $('#routeDetail');
   box.hidden = false;
+  sections.routes.select(id);
 
   box.innerHTML = `
+    <div class="detail-bar">
+      <button class="btn-back" id="routeBack">&larr; Back to Routes</button>
+    </div>
     <h2>${esc(r.name)} ${routePill(r.status)}</h2>
     <p class="muted small">${esc(r.dayName)} · start ${esc(r.start_time || '—')}
       ${r.estimated_end_time ? ` → ${esc(r.estimated_end_time)}` : ''}
@@ -327,7 +558,8 @@ async function showRoute(id) {
       <p class="msg" id="erMsg" hidden></p>
       <div class="form-actions-bar">
         <button class="btn btn-primary" id="erSave">Save changes</button>
-        <button class="btn" data-cancel>Cancel</button>
+        <button class="btn" id="erCancel">Cancel</button>
+        <span class="spacer"></span>
         <button class="btn" id="erDuplicate">Duplicate route</button>
         <span class="spacer"></span>
         ${r.status === 'archived'
@@ -376,14 +608,27 @@ async function showRoute(id) {
         </div>`).join('')}
     </div>`;
 
-  // Cancel restores the saved values rather than just closing the form.
-  const routeGuard = guardForm('#routeDetail');
+  /* The form fields hold a DRAFT seeded from the saved route. Nothing is
+     sent while they are edited, so Cancel has nothing to undo on the
+     server: no version, no assignment, no audit row, no effective date. */
+  const routeGuard = sections.routes.track(guardForm('#routeDetail'));
+
+  const backToRoutes = async ({ force = false } = {}) => {
+    if (await sections.routes.close({ force })) await loadRoutes();
+  };
+  $('#routeBack').addEventListener('click', () => backToRoutes());
+
+  $('#erCancel').addEventListener('click', async () => {
+    if (routeGuard.isDirty() && !(await confirmDiscard())) return;
+    routeGuard.restore();          // the form shows saved values again
+    await backToRoutes({ force: true });
+  });
 
   renderDeleteControl('#routeDeleteZone', {
     checkUrl: `/api/roles/routes/${id}/deletable`,
     deleteUrl: `/api/roles/routes/${id}`,
     label: 'route',
-    onDeleted: () => { $('#routeDetail').hidden = true; loadRoutes(); },
+    onDeleted: async () => { toast(`${r.name} was permanently deleted.`); await backToRoutes({ force: true }); },
   });
 
   $('#erSave').addEventListener('click', async () => {
@@ -401,45 +646,56 @@ async function showRoute(id) {
           changeNote: $('#erNote').value || undefined,
         }),
       });
-      msg.textContent = Object.keys(res.changes || {}).length
-        ? `Saved, effective ${res.effectiveDate}. Earlier records are unchanged.`
-        : 'Nothing changed.';
-      msg.className = 'msg ok'; msg.hidden = false;
       routeGuard.snapshot();                       // saved state is the new baseline
-      loadRoutes(); setTimeout(() => showRoute(id), 700);
-    } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
+      toast(Object.keys(res.changes || {}).length
+        ? `Route updated successfully, effective ${res.effectiveDate}.`
+        : 'Route saved — nothing had changed.');
+      await backToRoutes({ force: true });
+    } catch (e) {
+      // Save failed: keep the draft on screen with the reason.
+      msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false;
+      msg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   });
 
   $('#erDuplicate').addEventListener('click', async () => {
+    if (routeGuard.isDirty() && !(await confirmDiscard({
+      body: 'Duplicating leaves this route alone. Your unsaved edits to it would be lost.',
+    }))) return;
     const name = prompt('Name for the duplicate:', `${r.name} (copy)`);
     if (!name) return;
     await api(`/api/roles/routes/${id}/duplicate`, { method: 'POST', body: JSON.stringify({ name }) });
-    loadRoutes();
+    toast(`"${name}" created as a draft.`);
+    await backToRoutes({ force: true });
   });
 
   const arch = $('#erArchive');
   if (arch) arch.addEventListener('click', async () => {
     if (!confirm(`Archive "${r.name}"? It stops generating future service. All history is kept.`)) return;
     const res = await api(`/api/roles/routes/${id}/archive`, { method: 'POST', body: JSON.stringify({}) });
-    alert(res.message);
-    loadRoutes(); showRoute(id);
+    toast(res.message || 'Route archived.');
+    await backToRoutes({ force: true });
   });
   const rest = $('#erRestore');
   if (rest) rest.addEventListener('click', async () => {
     await api(`/api/roles/routes/${id}/restore`, { method: 'POST', body: JSON.stringify({}) });
-    loadRoutes(); showRoute(id);
+    toast('Route restored.');
+    await backToRoutes({ force: true });
   });
 
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
 $('#routeStatusFilter').addEventListener('change', loadRoutes);
-$('#newRouteBtn').addEventListener('click', () => { const c = $('#newRouteCard'); c.hidden = !c.hidden; });
-$('#nrCancel').addEventListener('click', () => {
-  if (!confirmLeave('Discard this unsaved form?')) return;
-  $$('#newRouteCard input, #newRouteCard select, #newRouteCard textarea').forEach(f => { if (f.type !== 'date') f.value = ''; });
-  $('#newRouteCard').hidden = true;
+createGuards.set('#newRouteCard', guardForm('#newRouteCard'));
+$('#newRouteBtn').addEventListener('click', async () => {
+  const card = $('#newRouteCard');
+  if (!card.hidden) return closeCreateForm('#newRouteCard');
+  if (!(await sections.routes.close())) return;
+  card.hidden = false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
+$('#nrCancel').addEventListener('click', () => closeCreateForm('#newRouteCard'));
 $('#nrSave').addEventListener('click', async () => {
   const msg = $('#nrMsg');
   try {
@@ -453,9 +709,9 @@ $('#nrSave').addEventListener('click', async () => {
         driverEmployeeId: $('#nrDriver').value ? Number($('#nrDriver').value) : undefined,
       }),
     });
-    msg.textContent = 'Route created.'; msg.className = 'msg ok'; msg.hidden = false;
-    ['nrName','nrArea','nrDesc'].forEach(i => { $('#' + i).value = ''; });
-    loadRoutes();
+    toast('Route created.');
+    resetCreateForm('#newRouteCard');
+    await loadRoutes();
   } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
 });
 
@@ -489,16 +745,24 @@ async function loadRoles() {
     </tr>`).join(''));
 
   $$('#roleTable [data-role-key]').forEach(b =>
-    b.addEventListener('click', () => showRole(b.dataset.roleKey)));
+    b.addEventListener('click', async () => {
+      if (await sections.roles.canSwitchTo(b.dataset.roleKey)) showRole(b.dataset.roleKey);
+    }));
 }
 
+/* Permissions are shown only for a role the admin deliberately opened —
+   the page does not pre-select Admin (or anything else) on arrival. */
 async function showRole(key) {
   const d = await api(`/api/roles/${encodeURIComponent(key)}`);
   const box = $('#roleDetail');
   box.hidden = false;
+  sections.roles.select(key);
   const locked = d.role.grantsEverything;
 
   box.innerHTML = `
+    <div class="detail-bar">
+      <button class="btn-back" id="roleBack">&larr; Back to Roles</button>
+    </div>
     <h2>${esc(d.role.name)} ${d.role.isSystem ? '<span class="pill">built-in</span>' : '<span class="pill intro">custom</span>'}</h2>
     <p class="muted small">${esc(d.role.description || '')} · ${d.users.length} user(s)</p>
     ${locked ? '<p class="msg">The Admin role always has every permission and cannot be edited.</p>' : ''}
@@ -523,13 +787,16 @@ async function showRole(key) {
 
     ${locked ? '' : `
       <p class="msg" id="permMsg" hidden></p>
-      <div style="margin-top:14px">
-        <button class="btn btn-primary" id="savePerms">Save permissions</button>
+      <div class="form-actions-bar" style="margin-top:14px">
+        <button class="btn btn-primary" id="savePerms">Save changes</button>
+        <button class="btn" id="cancelPerms">Cancel</button>
+        <span class="spacer"></span>
         ${d.role.isSystem ? '' :
           `<button class="btn" id="dupRole">Duplicate role</button>
            <button class="btn btn-danger" id="archiveRole">Archive role</button>`}
-        <button class="btn" data-cancel>Cancel</button>
       </div>`}
+
+    <div id="roleDeleteZone"></div>
 
     <div class="card" style="margin-top:14px">
       <h3>Users with this role</h3>
@@ -538,17 +805,34 @@ async function showRole(key) {
         : '<p class="muted small">Nobody holds this role.</p>'}
     </div>`;
 
+  /* Back works whether or not the role is editable. */
+  const backToRoles = async ({ force = false } = {}) => {
+    if (await sections.roles.close({ force })) await loadRoles();
+  };
+  $('#roleBack').addEventListener('click', () => backToRoles());
+
   if (!d.role.isSystem) {
     renderDeleteControl('#roleDeleteZone', {
       checkUrl: `/api/roles/${encodeURIComponent(key)}/deletable`,
       deleteUrl: `/api/roles/${encodeURIComponent(key)}`,
       label: 'role',
-      onDeleted: () => { $('#roleDetail').hidden = true; loadRoles(); },
+      onDeleted: async () => {
+        toast(`${d.role.name} was permanently deleted.`);
+        if (await sections.roles.close({ force: true })) await loadRoles();
+      },
     });
   }
 
   if (!locked) {
-    guardForm('#roleDetail', { onCancel: () => { $('#roleDetail').hidden = true; } });
+    /* Ticking boxes changes the checkboxes, nothing else. The grant is
+       written only by Save, so a cancelled edit leaves permissions — and
+       the audit trail — exactly as they were. */
+    const permGuard = sections.roles.track(guardForm('#roleDetail'));
+    $('#cancelPerms').addEventListener('click', async () => {
+      if (permGuard.isDirty() && !(await confirmDiscard())) return;
+      permGuard.restore();
+      await backToRoles({ force: true });
+    });
     $$('[data-cat-all]').forEach(b => b.addEventListener('click', () => {
       const cat = permCatalog.categories.find(c => c.name === b.dataset.catAll);
       cat.permissions.forEach(p => { const el = $(`[data-perm="${p.key}"]`); if (el) el.checked = true; });
@@ -566,10 +850,13 @@ async function showRole(key) {
         const r = await api(`/api/roles/${encodeURIComponent(key)}/permissions`, {
           method: 'PUT', body: JSON.stringify({ permissions }),
         });
-        msg.textContent = `Saved. ${r.added.length} added, ${r.removed.length} removed. Logged to the audit trail.`;
-        msg.className = 'msg ok'; msg.hidden = false;
-        loadRoles();
-      } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
+        permGuard.snapshot();
+        toast(`Permissions updated — ${r.added.length} added, ${r.removed.length} removed.`);
+        await backToRoles({ force: true });
+      } catch (e) {
+        msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false;
+        msg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
     });
 
     const dup = $('#dupRole');
@@ -580,7 +867,8 @@ async function showRole(key) {
         method: 'POST',
         body: JSON.stringify({ key: name.toLowerCase().replace(/\s+/g, '_'), name, copyFrom: key }),
       });
-      loadRoles();
+      toast(`Role "${name}" created.`);
+      await backToRoles({ force: true });
     });
 
     const arch = $('#archiveRole');
@@ -590,19 +878,23 @@ async function showRole(key) {
         await api(`/api/roles/${encodeURIComponent(key)}`, {
           method: 'PATCH', body: JSON.stringify({ status: 'archived' }),
         });
-        box.hidden = true; loadRoles();
+        toast(`${d.role.name} archived.`);
+        await backToRoles({ force: true });
       } catch (e) { alert(e.message); }
     });
   }
   box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-$('#newRoleBtn').addEventListener('click', () => { const c = $('#newRoleCard'); c.hidden = !c.hidden; });
-$('#nrlCancel').addEventListener('click', () => {
-  if (!confirmLeave('Discard this unsaved form?')) return;
-  $$('#newRoleCard input, #newRoleCard select, #newRoleCard textarea').forEach(f => { if (f.type !== 'date') f.value = ''; });
-  $('#newRoleCard').hidden = true;
+createGuards.set('#newRoleCard', guardForm('#newRoleCard'));
+$('#newRoleBtn').addEventListener('click', async () => {
+  const card = $('#newRoleCard');
+  if (!card.hidden) return closeCreateForm('#newRoleCard');
+  if (!(await sections.roles.close())) return;
+  card.hidden = false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
+$('#nrlCancel').addEventListener('click', () => closeCreateForm('#newRoleCard'));
 $('#nrlName').addEventListener('input', () => {
   if (!$('#nrlKey').dataset.touched) {
     $('#nrlKey').value = $('#nrlName').value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '_');
@@ -620,22 +912,20 @@ $('#nrlSave').addEventListener('click', async () => {
         copyFrom: $('#nrlCopy').value || undefined,
       }),
     });
-    msg.textContent = 'Role created. Tick its permissions below.';
-    msg.className = 'msg ok'; msg.hidden = false;
-    ['nrlName','nrlKey','nrlDesc'].forEach(i => { $('#' + i).value = ''; });
-    delete $('#nrlKey').dataset.touched;
-    await loadRoles(); showRole(r.key);
+    toast('Role created. Open it to set its permissions.');
+    resetCreateForm('#newRoleCard');
+    await loadRoles();
   } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
 });
 
-/* ---------- employees ---------- *//* ---------- employees ---------- */
+/* ---------- employees ---------- */
 const EMP_STATUS_PILL = { active:'ok', inactive:'', on_leave:'warn', terminated:'bad', archived:'bad' };
 const fmtStatus = (st) => `<span class="pill ${EMP_STATUS_PILL[st] ?? ''}">${esc(String(st).replace('_',' '))}</span>`;
 const hrs = (mins) => (mins / 60).toFixed(1);
 
 async function loadEmployees() {
-  $('#empListView').hidden = false;
-  $('#empDetailView').hidden = true;
+  // Rendering the list always means no employee is open.
+  sections.employees.reset();
 
   const params = new URLSearchParams();
   if ($('#empSearch').value) params.set('q', $('#empSearch').value);
@@ -658,7 +948,9 @@ async function loadEmployees() {
     </tr>`).join(''));
 
   $$('#empTable [data-emp]').forEach(b =>
-    b.addEventListener('click', () => showEmployee(b.dataset.emp)));
+    b.addEventListener('click', async () => {
+      if (await sections.employees.canSwitchTo(b.dataset.emp)) showEmployee(b.dataset.emp);
+    }));
 }
 
 async function showEmployee(id) {
@@ -667,6 +959,7 @@ async function showEmployee(id) {
   $('#empListView').hidden = true;
   const box = $('#empDetailView');
   box.hidden = false;
+  sections.employees.select(id);
 
   box.innerHTML = `
     <button class="btn" id="backToEmps" style="margin-bottom:12px">← All employees</button>
@@ -833,23 +1126,43 @@ async function showEmployee(id) {
       <p class="msg" id="edMsg" hidden></p>
       <div class="form-actions-bar">
         <button class="btn btn-primary" id="edSave">Save changes</button>
-        <button class="btn" data-cancel id="edCancel">Cancel</button>
+        <button class="btn" id="edCancel">Cancel</button>
       </div>
       <div id="empDeleteZone"></div>
     </div>`;
 
-  $('#backToEmps').addEventListener('click', loadEmployees);
-  $('#editEmpBtn').addEventListener('click', () => {
-    const c = $('#editEmpCard'); c.hidden = !c.hidden;
-    if (!c.hidden) c.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const backToEmployees = async ({ force = false } = {}) => {
+    if (await sections.employees.close({ force })) await loadEmployees();
+  };
+  $('#backToEmps').addEventListener('click', () => backToEmployees());
+
+  /* Opening an employee shows their record. Editing is a separate,
+     deliberate step, and the form it opens is a draft. */
+  $('#editEmpBtn').addEventListener('click', async () => {
+    const c = $('#editEmpCard');
+    if (!c.hidden) {
+      if (empGuard.isDirty() && !(await confirmDiscard())) return;
+      empGuard.restore(); c.hidden = true; return;
+    }
+    c.hidden = false;
+    c.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   });
-  const empGuard = guardForm('#editEmpCard', { onCancel: () => { $('#editEmpCard').hidden = true; } });
+  const empGuard = sections.employees.track(guardForm('#editEmpCard'));
+
+  $('#edCancel').addEventListener('click', async () => {
+    if (empGuard.isDirty() && !(await confirmDiscard())) return;
+    empGuard.restore();
+    await backToEmployees({ force: true });
+  });
 
   renderDeleteControl('#empDeleteZone', {
     checkUrl: `/api/people/employees/${id}/deletable`,
     deleteUrl: `/api/people/employees/${id}`,
     label: 'employee',
-    onDeleted: () => loadEmployees(),
+    onDeleted: async () => {
+      toast(`${e.first_name} ${e.last_name} was permanently deleted.`);
+      await backToEmployees({ force: true });
+    },
   });
 
   $('#edSave').addEventListener('click', async () => {
@@ -879,11 +1192,13 @@ async function showEmployee(id) {
                                  effectiveDate: $('#edPayDate').value || undefined }),
         });
       }
-      msg.textContent = 'Saved. Changes are recorded in the audit trail.';
-      msg.className = 'msg ok'; msg.hidden = false;
       empGuard.snapshot();
-      setTimeout(() => showEmployee(id), 700);
-    } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
+      toast('Employee updated successfully.');
+      await backToEmployees({ force: true });
+    } catch (ex) {
+      msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false;
+      msg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   });
 
   $$('[data-pw]').forEach(b => b.addEventListener('click', async () => {
@@ -917,15 +1232,16 @@ async function showEmployee(id) {
 }
 
 /* new employee form */
-$('#newEmpBtn').addEventListener('click', () => {
-  const c = $('#newEmpCard'); c.hidden = !c.hidden;
-  if (!c.hidden) $('#neHire').value = new Date().toISOString().slice(0, 10);
+createGuards.set('#newEmpCard', guardForm('#newEmpCard'));
+$('#newEmpBtn').addEventListener('click', async () => {
+  const c = $('#newEmpCard');
+  if (!c.hidden) return closeCreateForm('#newEmpCard');
+  if (!(await sections.employees.close())) return;
+  c.hidden = false;
+  $('#neHire').value = new Date().toISOString().slice(0, 10);
+  c.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
-$('#neCancel').addEventListener('click', () => {
-  if (!confirmLeave('Discard this unsaved form?')) return;
-  $$('#newEmpCard input, #newEmpCard select, #newEmpCard textarea').forEach(f => { if (f.type !== 'date') f.value = ''; });
-  $('#newEmpCard').hidden = true;
-});
+$('#neCancel').addEventListener('click', () => closeCreateForm('#newEmpCard'));
 $('#neSave').addEventListener('click', async () => {
   const msg = $('#neMsg');
   try {
@@ -940,14 +1256,21 @@ $('#neSave').addEventListener('click', async () => {
         emergencyContactName: $('#neEcName').value, emergencyContactPhone: $('#neEcPhone').value,
       }),
     });
-    msg.innerHTML = r.temporaryPassword
-      ? `Employee created. Temporary password: <code style="font-size:1.05rem">${esc(r.temporaryPassword)}</code>
-         <br /><span class="small">Shown once. They must change it at first sign-in.</span>`
-      : 'Employee created.';
-    msg.className = 'msg ok'; msg.hidden = false;
-    ['neFirst','neLast','neEmail','nePhone','neCode','nePayRate','neAddress','neZip','neEcName','neEcPhone']
-      .forEach(i => { $('#' + i).value = ''; });
-    loadEmployees();
+    /* A temporary password is shown exactly once, so this one success
+       message stays on screen instead of flashing past in a toast. */
+    if (r.temporaryPassword) {
+      msg.innerHTML = `Employee created. Temporary password:
+        <code style="font-size:1.05rem">${esc(r.temporaryPassword)}</code>
+        <br /><span class="small">Shown once. They must change it at first sign-in.</span>`;
+      msg.className = 'msg ok'; msg.hidden = false;
+      ['neFirst','neLast','neEmail','nePhone','neCode','nePayRate','neAddress','neZip','neEcName','neEcPhone']
+        .forEach(i => { $('#' + i).value = ''; });
+      createGuards.get('#newEmpCard')?.snapshot();
+    } else {
+      toast('Employee created.');
+      resetCreateForm('#newEmpCard');
+    }
+    await loadEmployees();
   } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
 });
 
@@ -977,9 +1300,11 @@ async function loadAccounts() {
       <td class="small muted">${u.last_login_at ? fmtDate(u.last_login_at) : 'never'}</td>
       <td>
         <button class="btn small" data-acct-pw="${u.id}">Temp password</button>
-        <button class="btn small" data-acct-toggle="${u.id}" data-status="${esc(u.status)}">
+        <button class="btn small" data-acct-toggle="${u.id}" data-status="${esc(u.status)}"
+          data-name="${esc(u.first_name)} ${esc(u.last_name)}">
           ${u.status === 'active' ? 'Deactivate' : 'Reactivate'}</button>
-        <button class="btn small" data-acct-lock="${u.id}" data-locked="${u.isLocked}">
+        <button class="btn small" data-acct-lock="${u.id}" data-locked="${u.isLocked}"
+          data-name="${esc(u.first_name)} ${esc(u.last_name)}">
           ${u.isLocked ? 'Unlock' : 'Lock'}</button>
         <button class="btn small" data-acct-role="${u.id}" data-role="${esc(u.role)}">Role</button>
       </td>
@@ -1002,15 +1327,27 @@ async function loadAccounts() {
     });
   }));
 
-  $$('#acctTable [data-acct-toggle]').forEach(b => b.addEventListener('click', () => act(() =>
-    api(`/api/people/accounts/${b.dataset.acctToggle}`, {
+  /* These write immediately, so each one asks first: a single stray click
+     in a table row should never sign somebody out of the system. */
+  $$('#acctTable [data-acct-toggle]').forEach(b => b.addEventListener('click', () => {
+    const deactivating = b.dataset.status === 'active';
+    if (!confirm(deactivating
+      ? `Deactivate ${b.dataset.name || 'this account'}? They will be signed out and unable to sign in.`
+      : `Reactivate ${b.dataset.name || 'this account'}?`)) return;
+    act(() => api(`/api/people/accounts/${b.dataset.acctToggle}`, {
       method: 'PATCH',
-      body: JSON.stringify({ status: b.dataset.status === 'active' ? 'deactivated' : 'active' }),
-    }))));
+      body: JSON.stringify({ status: deactivating ? 'deactivated' : 'active' }),
+    }));
+  }));
 
-  $$('#acctTable [data-acct-lock]').forEach(b => b.addEventListener('click', () => act(() =>
-    api(`/api/people/accounts/${b.dataset.acctLock}/${b.dataset.locked === 'true' ? 'unlock' : 'lock'}`,
-        { method: 'POST', body: JSON.stringify({}) }))));
+  $$('#acctTable [data-acct-lock]').forEach(b => b.addEventListener('click', () => {
+    const locking = b.dataset.locked !== 'true';
+    if (!confirm(locking
+      ? `Lock ${b.dataset.name || 'this account'}? They cannot sign in until it is unlocked.`
+      : `Unlock ${b.dataset.name || 'this account'}?`)) return;
+    act(() => api(`/api/people/accounts/${b.dataset.acctLock}/${locking ? 'lock' : 'unlock'}`,
+                  { method: 'POST', body: JSON.stringify({}) }));
+  }));
 
   $$('#acctTable [data-acct-role]').forEach(b => b.addEventListener('click', () => {
     const next = prompt(`Change role from "${b.dataset.role}" to (admin / employee / customer):`, b.dataset.role);
@@ -1090,15 +1427,33 @@ const loaders = {
   roles: loadRoles, pickups: loadPickups,
   payments: loadPayments, reports: loadReports,
 };
-/* Switching tabs abandons whatever is open, so ask first. */
+/* Switching tabs abandons whatever is open. Ask first if there is a draft
+   in progress — and never quietly save it either way. */
+let tabSwitchAllowed = false;
 $$('[data-tab]').forEach(b => b.addEventListener('click', (e) => {
-  if (!confirmLeave('You have unsaved changes. Leave without saving?')) {
-    e.stopImmediatePropagation();
-    e.preventDefault();
-  }
+  if (tabSwitchAllowed || !anyDirty()) return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  confirmDiscard({ body: 'Leaving this tab will discard the changes you have not saved.' })
+    .then(discard => {
+      if (!discard) return;
+      resetPageState();
+      tabSwitchAllowed = true;
+      b.click();
+      tabSwitchAllowed = false;
+    });
 }, true));
 
-wireTabs((name) => loaders[name]?.());
+/* Entering a tab — including coming back to one — starts from the normal
+   default view: filters and the list, nothing selected, no form open. */
+wireTabs(async (name) => {
+  resetPageState();
+  await loaders[name]?.();
+  /* Some loaders fill in a create form's dropdowns (route days, drivers)
+     the first time their tab is opened. Re-baseline afterwards, so a
+     freshly populated <select> is not mistaken for an unsaved edit. */
+  CREATE_CARDS.forEach(sel => createGuards.get(sel)?.snapshot());
+});
 
 let searchTimer;
 $('#custSearch').addEventListener('input', () => {
@@ -1357,6 +1712,8 @@ Object.assign(loaders, {
    Coupons & promotions (marketing)
    ============================================================ */
 let couponRange = '90d';
+let couponCache = [];
+let couponRedemptions = null;
 const COUPON_STATUS_PILL = {
   active: 'ok', scheduled: 'pending', expired: '', limit_reached: 'warn', disabled: 'bad',
 };
@@ -1397,19 +1754,18 @@ async function loadCoupons() {
       <td class="num">${money(c.revenue)}</td>
       <td class="num">${money(c.discountGiven)}</td>
       <td><span class="pill ${COUPON_STATUS_PILL[c.status] ?? ''}">${esc(c.status.replace('_', ' '))}</span></td>
-      <td>
-        <button class="btn small" data-coupon-hist="${c.id}" data-code="${esc(c.code)}">History</button>
-        <button class="btn small" data-coupon-toggle="${c.id}" data-disabled="${c.disabled}">
-          ${c.disabled ? 'Enable' : 'Disable'}</button>
-        ${c.used === 0 ? `<button class="btn small btn-danger" data-coupon-del="${c.id}"
-          data-code="${esc(c.code)}">Delete</button>` : ''}
-      </td>
+      <td><button class="btn small" data-coupon="${c.id}">Manage</button></td>
     </tr>`).join(''));
 
-  $$('#couponTable [data-coupon-hist]').forEach(b => b.addEventListener('click', async () => {
-    const rows = await api(`/api/promo/coupons/${b.dataset.couponHist}/redemptions`);
+  couponCache = coupons;
+  $$('#couponTable [data-coupon]').forEach(b => b.addEventListener('click', async () => {
+    if (await sections.coupons.canSwitchTo(b.dataset.coupon)) showCoupon(Number(b.dataset.coupon));
+  }));
+
+  async function showRedemptions(id, code) {
+    const rows = await api(`/api/promo/coupons/${id}/redemptions`);
     $('#redemptionCard').hidden = false;
-    $('#redemptionTitle').textContent = `Redemption history — ${b.dataset.code}`;
+    $('#redemptionTitle').textContent = `Redemption history — ${code}`;
     $('#redemptionTable').innerHTML = table(
       ['Customer', 'Plan', 'Original', 'Discount', 'Final', 'Type', 'Redeemed'],
       rows.map(r => `<tr>
@@ -1422,23 +1778,10 @@ async function loadCoupons() {
         <td><span class="pill ${r.customer_type === 'new' ? 'ok' : ''}">${esc(r.customer_type)}</span></td>
         <td class="small muted">${fmtDate(r.redeemed_at)}</td>
       </tr>`).join(''));
+    $('#redemptionClose').hidden = false;
     $('#redemptionCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }));
-
-  $$('#couponTable [data-coupon-toggle]').forEach(b => b.addEventListener('click', async () => {
-    await api(`/api/promo/coupons/${b.dataset.couponToggle}`, {
-      method: 'PATCH', body: JSON.stringify({ disabled: b.dataset.disabled !== '1' }),
-    });
-    loadCoupons();
-  }));
-
-  $$('#couponTable [data-coupon-del]').forEach(b => b.addEventListener('click', async () => {
-    if (!confirm(`DELETE COUPON?\n\n${b.dataset.code}\n\nThis coupon has never been redeemed and will be permanently removed.\nThis action cannot be undone.`)) return;
-    try {
-      const r = await api(`/api/promo/coupons/${b.dataset.couponDel}`, { method: 'DELETE' });
-      alert(r.message); loadCoupons();
-    } catch (e) { alert(e.message + (e.suggestion ? `\n\n${e.suggestion}` : '')); }
-  }));
+  }
+  couponRedemptions = showRedemptions;
 
   lineChart($('#chartCouponRedemptions'), {
     title: 'Redemptions over time',
@@ -1453,10 +1796,121 @@ async function loadCoupons() {
   barChart($('#chartDiscByCoupon'),  { title: 'Discount cost by coupon', data: analytics.discountByCoupon, color: '#f1541f' });
 }
 
-$('#newCouponBtn').addEventListener('click', () => {
-  const f = $('#newCouponForm'); f.hidden = !f.hidden;
+/* ---------- one coupon ----------
+   Same shape as everything else: the list opens a record, the record
+   holds a draft, and only Save writes. Disabling a coupon changes what
+   customers can redeem, so it is a saved change like any other — not a
+   one-click toggle in the table. */
+function showCoupon(id) {
+  const c = couponCache.find(x => x.id === id);
+  if (!c) return;
+  const box = $('#couponDetail');
+  box.hidden = false;
+  sections.coupons.select(id);
+
+  const sel = (v, opts) => opts.map(([val, label]) =>
+    `<option value="${esc(val)}" ${String(val) === String(v) ? 'selected' : ''}>${esc(label)}</option>`).join('');
+
+  box.innerHTML = `
+    <div class="detail-bar">
+      <button class="btn-back" id="couponBack">&larr; Back to Coupons</button>
+    </div>
+    <h2>${esc(c.code)} <span class="pill ${COUPON_STATUS_PILL[c.status] ?? ''}">${
+      esc(c.status.replace('_', ' '))}</span></h2>
+    <p class="muted small">${esc(discountLabel(c))} · redeemed ${c.used}${
+      c.max_redemptions ? ' of ' + c.max_redemptions : ''} time(s)
+      · ${money(c.revenue)} revenue · ${money(c.discountGiven)} given away</p>
+
+    <div class="card" id="couponEditCard" style="background:var(--sand)">
+      <h3>Edit coupon</h3>
+      <p class="muted small">The code and discount are fixed once a coupon exists — changing
+        either would rewrite what past customers were actually promised.</p>
+      <div class="row">
+        <div><label>Name</label><input id="cuName" value="${esc(c.name)}" /></div>
+        <div><label>Starts</label><input id="cuStart" type="date" value="${esc((c.starts_at || '').slice(0,10))}" /></div>
+        <div><label>Ends</label><input id="cuEnd" type="date" value="${esc((c.ends_at || '').slice(0,10))}" /></div>
+        <div><label>Max redemptions</label><input id="cuMax" type="number" value="${c.max_redemptions ?? ''}" /></div>
+      </div>
+      <div class="row">
+        <div><label>Per customer</label><select id="cuPer">${sel(c.per_customer_limit, [
+          ['once','Once per customer'], ['multiple','Multiple times'],
+          ['once_per_cycle','Once per billing cycle']])}</select></div>
+        <div><label>Eligible customers</label><select id="cuEligible">${sel(c.eligible_customer_type, [
+          ['all','All customers'], ['new','New customers only'], ['existing','Existing customers only']])}</select></div>
+        <div><label>Stacking</label><select id="cuStack">${sel(c.allow_stacking ? '1' : '0', [
+          ['0','Cannot combine'], ['1','Can combine']])}</select></div>
+        <div><label>Availability</label><select id="cuDisabled">${sel(c.disabled ? '1' : '0', [
+          ['0','Available to redeem'], ['1','Disabled — nobody can redeem it']])}</select></div>
+      </div>
+      <div><label>Description</label><input id="cuDesc" value="${esc(c.description || '')}" /></div>
+      <p class="msg" id="cuMsg" hidden></p>
+      <div class="form-actions-bar">
+        <button class="btn btn-primary" id="cuSave">Save changes</button>
+        <button class="btn" id="cuCancel">Cancel</button>
+        <span class="spacer"></span>
+        <button class="btn" id="cuHistory">Redemption history</button>
+      </div>
+      <div id="couponDeleteZone"></div>
+    </div>`;
+
+  const guard = sections.coupons.track(guardForm('#couponEditCard'));
+  const backToCoupons = async ({ force = false } = {}) => {
+    if (await sections.coupons.close({ force })) { $('#redemptionCard').hidden = true; await loadCoupons(); }
+  };
+
+  $('#couponBack').addEventListener('click', () => backToCoupons());
+  $('#cuCancel').addEventListener('click', async () => {
+    if (guard.isDirty() && !(await confirmDiscard())) return;
+    guard.restore();
+    await backToCoupons({ force: true });
+  });
+  $('#cuHistory').addEventListener('click', () => couponRedemptions?.(c.id, c.code));
+
+  renderDeleteControl('#couponDeleteZone', {
+    checkUrl: `/api/promo/coupons/${c.id}/deletable`,
+    deleteUrl: `/api/promo/coupons/${c.id}`,
+    label: 'coupon',
+    onDeleted: async () => { toast(`${c.code} was permanently deleted.`); await backToCoupons({ force: true }); },
+  });
+
+  $('#cuSave').addEventListener('click', async () => {
+    const msg = $('#cuMsg');
+    const disabling = $('#cuDisabled').value === '1' && !c.disabled;
+    if (disabling && !confirm(`Disable ${c.code}? Nobody will be able to redeem it from now on.`)) return;
+    try {
+      await api(`/api/promo/coupons/${c.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: $('#cuName').value, description: $('#cuDesc').value || undefined,
+          startsAt: $('#cuStart').value || undefined, endsAt: $('#cuEnd').value || undefined,
+          maxRedemptions: $('#cuMax').value || undefined,
+          perCustomerLimit: $('#cuPer').value, eligibleCustomerType: $('#cuEligible').value,
+          allowStacking: $('#cuStack').value === '1',
+          disabled: $('#cuDisabled').value === '1',
+        }),
+      });
+      guard.snapshot();
+      toast('Coupon updated successfully.');
+      await backToCoupons({ force: true });
+    } catch (e) {
+      msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false;
+      msg.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  });
+
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+createGuards.set('#newCouponForm', guardForm('#newCouponForm'));
+$('#newCouponBtn').addEventListener('click', async () => {
+  const f = $('#newCouponForm');
+  if (!f.hidden) return closeCreateForm('#newCouponForm');
+  if (!(await sections.coupons.close())) return;
+  f.hidden = false;
+  f.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 });
-$('#ncCancel').addEventListener('click', () => { $('#newCouponForm').hidden = true; });
+$('#ncCancel').addEventListener('click', () => closeCreateForm('#newCouponForm'));
+$('#redemptionClose').addEventListener('click', () => { $('#redemptionCard').hidden = true; });
 $('#ncSave').addEventListener('click', async () => {
   const msg = $('#ncMsg');
   try {
@@ -1473,9 +1927,9 @@ $('#ncSave').addEventListener('click', async () => {
         allowStacking: $('#ncStack').value === '1',
       }),
     });
-    msg.textContent = 'Coupon created.'; msg.className = 'msg ok'; msg.hidden = false;
-    ['ncCode','ncName','ncValue','ncDesc','ncMax'].forEach(i => { $('#' + i).value = ''; });
-    loadCoupons();
+    toast('Coupon created.');
+    resetCreateForm('#newCouponForm');
+    await loadCoupons();
   } catch (e) { msg.textContent = e.message; msg.className = 'msg error'; msg.hidden = false; }
 });
 

@@ -113,7 +113,10 @@ $('#updateCard').addEventListener('click', () => {
 function loadSchedule() {
   const { schedule, address } = account;
   $('#scheduleBox').innerHTML = `
-    <h2>${esc(schedule.dayNames.join(' & ') || 'Not scheduled')}</h2>
+    <h2>${esc(schedule.dayNames.join(' & ')
+      || (schedule.notice ? 'Service paused' : 'Not scheduled'))}</h2>
+    ${schedule.notice ? `<p class="msg ${
+      schedule.notice.state === 'on_hold' ? 'warn' : 'error'}">${esc(schedule.notice.message)}</p>` : ''}
     <p class="small">Place securely tied household trash outside your door on your scheduled days.
       Pickup days may vary by community or service area.</p>
     <p><strong>Next pickup:</strong> ${schedule.nextPickup ? fmtDate(schedule.nextPickup) : '—'}</p>
