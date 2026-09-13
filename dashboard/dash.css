@@ -68,8 +68,10 @@ main { padding:clamp(16px,3vw,28px); max-width:1400px; margin-inline:auto; }
 }
 .card + .card { margin-top:14px; }
 .stat-grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); }
-.stat { background:var(--white); border:1px solid var(--line); border-radius:var(--radius); padding:15px 17px; }
-.stat-label { font-size:.72rem; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); }
+.stat { background:var(--white); border:1px solid var(--line); border-radius:var(--radius); padding:15px 17px; display:flex; flex-direction:column; }
+/* Reserve room for a two-line label so a wrapping label (e.g. "Employees
+   assigned") never pushes its value below neighbouring cards' values. */
+.stat-label { font-size:.72rem; font-weight:800; letter-spacing:.07em; text-transform:uppercase; color:var(--muted); min-height:3em; }
 .stat-value { font-size:1.9rem; font-weight:900; letter-spacing:-.03em; margin-top:2px; }
 .stat-sub { font-size:.8rem; color:var(--muted); }
 .stat.accent .stat-value { color:var(--orange-dark); }
@@ -118,6 +120,15 @@ td.num, th.num { text-align:right; }
 .btn-primary:hover { background:var(--orange-dark); }
 .btn-danger { background:var(--bad); color:#fff; border-color:transparent; }
 .btn:disabled { opacity:.55; cursor:not-allowed; }
+/* Separate the Create/Cancel action buttons from the last input row so these
+   create forms match the New employee form's spacing. The employee form gets
+   this gap from its always-visible help note; these forms have no such note,
+   so the gap is added here. Applied to the primary button; because both
+   buttons share one line, the Cancel button moves down with it. */
+#newCommCard > .btn-primary,
+#newRouteCard > .btn-primary,
+#newRoleCard > .btn-primary,
+#newCouponForm > .btn-primary { margin-top:46px; }
 input, select, textarea {
   width:100%; padding:10px 12px; border:1px solid #d7d2cb; border-radius:10px;
   background:#fdfcfa; color:var(--ink);
@@ -247,7 +258,10 @@ label { font-size:.8rem; font-weight:800; display:block; margin-bottom:5px; }
 .bar-value { font-size:.83rem; font-weight:800; text-align:right; white-space:nowrap; }
 .status-chip { font-size:.66rem; font-weight:900; letter-spacing:.04em; white-space:nowrap; }
 
-.chart-grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); }
+/* auto-fill (not auto-fit) keeps empty tracks so a leftover card stays
+   column-width and aligned to the grid, instead of stretching to fill the
+   row. margin-block gives the grid the same 14px rhythm as adjacent cards. */
+.chart-grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); margin-block:14px; }
 .range-bar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
 .range-bar button {
   background:var(--white); border:1px solid var(--line); border-radius:999px;
