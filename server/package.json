@@ -2,7 +2,7 @@
   "name": "dash-trash-pickup-server",
   "version": "1.0.0",
   "private": true,
-  "description": "Square payment + subscription backend for Dash Trash Pickup",
+  "description": "Payment and subscription backend for Dash Trash Pickup",
   "type": "module",
   "main": "server.js",
   "scripts": {
