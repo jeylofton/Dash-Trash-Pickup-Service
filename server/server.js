@@ -15,10 +15,10 @@
 import 'dotenv/config';
 import express from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { createCustomer, saveCard, createSubscription,
-         verifyCredentials, SquareError, squareEnvironment } from './lib/payments/square.js';
 import { getIntroClaimed, reserveIntroSpot, releaseIntroSpot, recordSignup } from './store.js';
 import { migrate, one } from './db/index.js';
+import { enrol } from './lib/signup.js';
+import { providerName } from './lib/payments/index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
 import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
 import { introCoupon } from './lib/coupons.js';
@@ -40,6 +40,10 @@ import { fileURLToPath } from 'node:url';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// TODO(Task 6): purge the remaining Square labelling in /api/config, /api/health,
+// and the boot banner below. Kept as a plain env-var label (no API call) for now.
+const squareEnvironment = process.env.SQUARE_ENVIRONMENT || 'sandbox';
 
 /* ---------- Business rules. Keep these in step with CONFIG in scripts.js. ---------- */
 const INTRO_TOTAL_SPOTS = 100;
@@ -172,97 +176,18 @@ app.get('/api/service-area', (req, res) => {
 });
 
 app.post('/api/checkout', rateLimit, async (req, res) => {
-  const {
-    sourceId, plan, firstName, lastName, email, phone,
-    street, unit, community, zip, startDate,
-  } = req.body || {};
-
-  /* --- validate before touching Square --- */
-  const missing = Object.entries({
-    sourceId, plan, firstName, lastName, email, phone, street, unit, community, zip,
-  }).filter(([, v]) => !v).map(([k]) => k);
-
-  if (missing.length) {
-    return res.status(400).json({ ok: false, error: `Missing required fields: ${missing.join(', ')}` });
+  const result = await enrol({ ...req.body, outcome: req.body.outcome || 'success' });
+  if (!result.ok) {
+    return res.status(result.status === 'failed' ? 402 : 400)
+              .json({ ok: false, error: result.error, status: result.status });
   }
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    return res.status(400).json({ ok: false, error: 'That email address is not valid.' });
-  }
-  if (!/^\d{5}$/.test(zip)) {
-    return res.status(400).json({ ok: false, error: 'ZIP code must be 5 digits.' });
-  }
-
-  const planVariationId = PLAN_VARIATIONS[plan];
-  if (!planVariationId) {
-    return res.status(400).json({
-      ok: false,
-      error: `No Square plan configured for "${plan}". Set the matching SQUARE_PLAN_* value in .env.`,
-    });
-  }
-
-  /* --- reserve the introductory spot BEFORE charging ---
-     Reserving first means we never charge someone the intro rate when the
-     100 are gone. If Square then fails, we hand the spot back below. */
-  const wantsIntro = plan === 'Introductory';
-  let introReserved = false;
-
-  if (wantsIntro) {
-    introReserved = await reserveIntroSpot(INTRO_TOTAL_SPOTS);
-    if (!introReserved) {
-      return res.status(409).json({
-        ok: false,
-        code: 'INTRO_SOLD_OUT',
-        error: 'The introductory offer just sold out. Please choose another plan.',
-      });
-    }
-  }
-
-  try {
-    const customer = await createCustomer({
-      firstName, lastName, email, phone,
-      address: { street, unit, community, zip, city: 'Columbus', state: 'GA' },
-    });
-
-    const card = await saveCard({
-      sourceId,
-      customerId: customer.id,
-      cardholderName: `${firstName} ${lastName}`,
-      billingZip: zip,
-    });
-
-    const subscription = await createSubscription({
-      planVariationId,
-      customerId: customer.id,
-      cardId: card.id,
-      startDate: normalizeStartDate(startDate),
-      locationId: process.env.SQUARE_LOCATION_ID,
-    });
-
-    await recordSignup({
-      subscriptionId: subscription.id,
-      customerId: customer.id,
-      plan, email, community, zip,
-      introApplied: introReserved,
-    });
-
-    res.json({
-      ok: true,
-      confirmationId: subscription.id,
-      introApplied: introReserved,
-      startDate: subscription.start_date || null,
-    });
-
-  } catch (err) {
-    // Charging failed, so the reserved spot must go back to the pool.
-    if (introReserved) await releaseIntroSpot();
-
-    if (err instanceof SquareError) {
-      console.error('[checkout] Square error', err.endpoint, err.errors);
-      return res.status(402).json({ ok: false, error: err.publicMessage() });
-    }
-    console.error('[checkout]', err);
-    res.status(500).json({ ok: false, error: 'Something went wrong. You have not been charged.' });
-  }
+  res.json({
+    ok: true,
+    demo: providerName === 'demo',
+    confirmationId: result.paymentId,
+    subscriptionId: result.subscriptionId,
+    status: result.status,
+  });
 });
 
 /* ---------- Dashboard (authenticated) ---------- */
@@ -421,15 +346,7 @@ app.listen(PORT, async () => {
     console.warn(`    Those plans will be refused at checkout until you set them in .env\n`);
   }
 
-  try {
-    const locations = await verifyCredentials();
-    console.log(`  Square credentials OK - ${locations.length} location(s) found`);
-    const configured = locations.find(l => l.id === process.env.SQUARE_LOCATION_ID);
-    console.log(configured
-      ? `  Using location: ${configured.name} (${configured.id})\n`
-      : `  ! SQUARE_LOCATION_ID does not match any location on this account\n`);
-  } catch (err) {
-    console.error(`  ! Square credentials failed: ${err.message}`);
-    console.error(`    Check SQUARE_ACCESS_TOKEN and SQUARE_ENVIRONMENT in .env\n`);
-  }
+  // Square credential verification lived here; there is no credential to
+  // verify for the demo provider. Report which provider is active instead.
+  console.log(`  Payment provider: ${providerName}\n`);
 });
