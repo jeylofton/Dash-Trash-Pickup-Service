@@ -7,7 +7,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "square:setup": "node bin/square-setup.js --env=sandbox",
+    "square:setup:prod": "node bin/square-setup.js --env=production",
+    "square:check": "node bin/square-setup.js --env=sandbox --dry-run"
   },
   "engines": {
     "node": ">=18"

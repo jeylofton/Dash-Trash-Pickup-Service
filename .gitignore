@@ -19,3 +19,5 @@ server/data/
 *.db
 *.db-wal
 *.db-shm
+server/.env.production
+.env.production

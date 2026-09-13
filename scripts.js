@@ -29,6 +29,10 @@
       price: 18,            // <-- $15 or $18. Change this one number.
       totalSpots: 100,
       label: 'Introductory Rate',
+      // How long the introductory price lasts before the standard monthly
+      // rate takes over. Square bills this as a two-phase plan, so this
+      // number MUST match the intro phase in server/bin/square-setup.js.
+      termMonths: 12,
       // How long before the popup appears, and how often a visitor sees it.
       popupDelayMs: 1400,
       remindAfterDays: 7,   // dismissed? don't show again for this many days
@@ -90,7 +94,8 @@
     const quarterly = monthly * 3 - quarterlyDiscount;
     const annual = monthly * 12 - annualDiscount;
     return {
-      intro:     { total: CONFIG.intro.price, months: 1,  perMonth: CONFIG.intro.price, saves: 0 },
+      intro:     { total: CONFIG.intro.price, months: 1,  perMonth: CONFIG.intro.price, saves: 0,
+                   termMonths: CONFIG.intro.termMonths, after: monthly },
       monthly:   { total: monthly,   months: 1,  perMonth: monthly,       saves: 0 },
       quarterly: { total: quarterly, months: 3,  perMonth: quarterly / 3,  saves: quarterlyDiscount },
       annual:    { total: annual,    months: 12, perMonth: annual / 12,    saves: annualDiscount },
@@ -318,11 +323,19 @@
       const p = PRICING[key];
       if (!p) return;
       const per = { intro: '/mo', monthly: '/mo', quarterly: '/qtr', annual: '/yr' }[key];
-      el.textContent = money(p.total) + per;
+      el.textContent = key === 'intro'
+        ? `${money(p.total)}/mo for ${p.termMonths} mo, then ${money(p.after)}/mo`
+        : money(p.total) + per;
     });
 
     $$('[data-intro-price]').forEach(el => { el.textContent = money(CONFIG.intro.price); });
     $$('[data-intro-total]').forEach(el => { el.textContent = String(CONFIG.intro.totalSpots); });
+
+    /* The introductory rate is a TERM, not a permanent price. These two hooks
+       disclose that everywhere the offer appears. Both read from CONFIG, so
+       the page can never advertise a term Square is not actually billing. */
+    $$('[data-intro-term]').forEach(el => { el.textContent = String(CONFIG.intro.termMonths); });
+    $$('[data-intro-after]').forEach(el => { el.textContent = money(PRICING.intro.after); });
   }
 
   let spotsState = { claimed: 0, remaining: CONFIG.intro.totalSpots, soldOut: false };
@@ -509,9 +522,13 @@
     const renewal = $('[data-review="renewal"]');
     if (renewal) {
       const period = p && p.months === 1 ? 'month' : p ? `${p.months} months` : null;
-      renewal.textContent = p
-        ? `Renews automatically every ${period} at ${money(p.total)} until you cancel. Cancel anytime.`
-        : '';
+      // The introductory plan is a TERM, so "at $18 until you cancel" would be
+      // a lie on the one screen where the customer is about to be charged.
+      renewal.textContent = !p ? ''
+        : planKey === 'intro'
+          ? `Renews automatically every month at ${money(p.total)} for ${p.termMonths} months, `
+            + `then ${money(p.after)} per month until you cancel. Cancel anytime.`
+          : `Renews automatically every ${period} at ${money(p.total)} until you cancel. Cancel anytime.`;
     }
 
     showPaymentError('');

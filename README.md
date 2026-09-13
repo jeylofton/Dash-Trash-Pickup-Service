@@ -310,23 +310,50 @@ Go to <https://developer.squareup.com/apps> → *Create app*. From the app's
 
 **2. Create the subscription plans**
 
-Square bills subscriptions from *plan variations* in your catalog. In the
-[Square Dashboard](https://squareup.com/dashboard) → **Items & Services** →
-**Subscription Plans**, create one plan per pricing tier:
+Run the setup script instead of hand-entering plans in the dashboard. It talks
+to Square's Catalog API, creates all four plans, and writes their variation IDs
+straight into `.env`.
 
-| Plan | Price | Billing cadence | `.env` variable |
-|---|---|---|---|
-| Introductory | $18 | Monthly | `SQUARE_PLAN_INTRODUCTORY` |
-| Monthly | $28 | Monthly | `SQUARE_PLAN_MONTHLY` |
-| Quarterly | $74 | Every 3 months | `SQUARE_PLAN_QUARTERLY` |
-| Annual | $276 | Annually | `SQUARE_PLAN_ANNUAL` |
+```bash
+cd server
+cp .env.example .env
+# paste your Sandbox Access Token into SQUARE_ACCESS_TOKEN yourself
+npm run square:check     # dry run - shows what it would create
+npm run square:setup     # creates the plans and fills in .env
+```
 
-Copy each **plan variation ID** into the matching variable.
+It is safe to re-run: plans are matched by name, so a second run reuses what
+already exists rather than creating duplicates.
 
-> Keep these prices in step with `CONFIG.pricing` in `scripts.js`. The website
-> displays the price from `CONFIG`, but Square charges the amount on the plan
-> variation. If they disagree, **Square wins** and your customer is charged
-> something different from what they saw.
+| Plan | Billing | `.env` variable |
+|---|---|---|
+| Introductory | $18/mo for 12 months, **then $28/mo** | `SQUARE_PLAN_INTRODUCTORY` |
+| Monthly | $28/mo | `SQUARE_PLAN_MONTHLY` |
+| Quarterly | $74 every 3 months | `SQUARE_PLAN_QUARTERLY` |
+| Annual | $276/year | `SQUARE_PLAN_ANNUAL` |
+
+> The introductory rate is a **12-month term**, not a permanent price. Square
+> bills it as a two-phase plan. The site discloses the term from
+> `CONFIG.intro.termMonths` in `scripts.js` - if you change the term in one
+> place, change it in `server/bin/square-setup.js` too, or the page will
+> advertise something Square is not billing.
+
+> Prices live in `CONFIG.pricing` in `scripts.js` and are mirrored at the top of
+> `server/bin/square-setup.js`. The website displays `CONFIG`; Square charges
+> the plan variation. If they disagree, **Square wins** and your customer is
+> charged something different from what they saw.
+
+**Going to production**
+
+```bash
+cp .env.production.example .env.production
+# paste your Production Access Token into SQUARE_ACCESS_TOKEN yourself
+npm run square:setup:prod
+```
+
+That creates the same four plans in your live catalog. To actually go live,
+copy the production credentials and plan IDs into `.env` and set
+`SQUARE_ENVIRONMENT=production`. The browser SDK switches automatically.
 
 **3. Configure and run**
 

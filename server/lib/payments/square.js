@@ -43,13 +43,24 @@ export class SquareError extends Error {
       case 'CARD_DECLINED':
       case 'GENERIC_DECLINE':
         return 'That card was declined. Please try a different card.';
+      // Saving a card goes through the Cards API, which uses VERIFY_* codes
+      // where the Payments API uses these. Both are listed so a real failure
+      // tells the customer what to fix instead of "please try again".
       case 'CVV_FAILURE':
+      case 'VERIFY_CVV_FAILURE':
         return 'The security code did not match. Please check and try again.';
       case 'ADDRESS_VERIFICATION_FAILURE':
+      case 'VERIFY_AVS_FAILURE':
         return 'The billing ZIP code did not match your card. Please check and try again.';
       case 'EXPIRATION_FAILURE':
       case 'INVALID_EXPIRATION':
-        return 'That expiration date is not valid.';
+      case 'CARD_EXPIRED':
+        return 'That card has expired, or the expiration date is not valid.';
+      case 'INVALID_CARD':
+      case 'INVALID_CARD_DATA':
+        return 'Those card details are not valid. Please check the number, expiration, and security code.';
+      case 'CARD_DECLINED_VERIFICATION_REQUIRED':
+        return 'Your bank needs to verify this card. Please contact them, or try a different card.';
       case 'INSUFFICIENT_FUNDS':
         return 'The card has insufficient funds.';
       case 'CARD_TOKEN_EXPIRED':
@@ -61,7 +72,9 @@ export class SquareError extends Error {
   }
 }
 
-async function squareFetch(endpoint, { method = 'POST', body } = {}) {
+/** Exported so bin/square-setup.js can reach the Catalog API without a
+ *  second HTTP client. Route code should use the named helpers below. */
+export async function squareFetch(endpoint, { method = 'POST', body } = {}) {
   if (!ACCESS_TOKEN) {
     throw new SquareError('SQUARE_ACCESS_TOKEN is not set', { status: 500, endpoint });
   }
