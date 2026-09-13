@@ -41,6 +41,18 @@ export function migrate() {
 
   // Lets a discount say "for N billing periods". NULL means forever.
   addColumn('coupons', 'duration_periods', 'INTEGER');
+
+  // The introductory rate is a promotion on the Monthly plan, not a plan
+  // of its own (see server/lib/signup.js). Deactivate the old
+  // `Introductory` plans row so it can never be selected as a billable
+  // plan again — do NOT delete it, existing subscriptions reference it
+  // by foreign key and their history must stay readable. Naturally
+  // idempotent (a no-op once already inactive), guarded the same way as
+  // addColumn() so repeated boots never do redundant writes.
+  const introPlanActive = one(`SELECT active FROM plans WHERE code = 'Introductory'`);
+  if (introPlanActive && introPlanActive.active) {
+    db.exec(`UPDATE plans SET active = 0 WHERE code = 'Introductory'`);
+  }
 }
 
 /* Small helpers so route code reads cleanly. */

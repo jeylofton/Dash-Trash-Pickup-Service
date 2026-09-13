@@ -55,8 +55,17 @@ export async function enrol(input) {
     return { ok: false, error: 'An account already exists for that email address.' };
   }
 
-  const planRow = one(`SELECT * FROM plans WHERE code = ? AND active = 1`, plan);
-  if (!planRow) return { ok: false, error: `No active plan named "${plan}".` };
+  // The introductory rate is a PROMOTION on the Monthly plan, not a plan of
+  // its own — the `Introductory` plans row is kept (for old subscriptions'
+  // foreign keys) but deactivated by migrate(), so it can never be looked
+  // up as a billable plan again. The public wizard still sends
+  // `plan: "Introductory"` (see scripts.js); resolve that here to Monthly
+  // before anything else touches `plan`.
+  const isIntroRequest = plan === 'Introductory';
+  const planCode = isIntroRequest ? 'Monthly' : plan;
+
+  const planRow = one(`SELECT * FROM plans WHERE code = ? AND active = 1`, planCode);
+  if (!planRow) return { ok: false, error: `No active plan named "${planCode}".` };
 
   const passwordHash = await hashPassword(password);
 
@@ -64,7 +73,26 @@ export async function enrol(input) {
   // happens inside redeem() in transaction B, after payment succeeds.
   // customerId is null here because no customer row exists yet.
   let couponQuote = null;
-  if (couponCode) {
+  if (isIntroRequest) {
+    // THE SERVER DECIDES, NOT THE CLIENT: the public path resolves the
+    // active launch promotion itself from introCoupon() and ignores any
+    // couponCode the browser sent. A client that could name the coupon
+    // could mint promotional spots past the 100-spot cap — see brief.
+    // When the promotion is exhausted/expired/disabled/absent this simply
+    // leaves couponQuote null, so the customer silently pays the standard
+    // Monthly price instead of erroring.
+    const launch = introCoupon();
+    if (launch && launch.status === 'active') {
+      const check = validateCoupon({
+        code: launch.code, planId: planRow.id, customerId: null,
+        priceCents: planRow.price_cents,
+      });
+      if (check.ok) couponQuote = { coupon: check.coupon, quote: check.quote };
+    }
+  } else if (couponCode) {
+    // Not reachable from the public wizard (it never sends a plan other
+    // than Introductory/Monthly/Quarterly/Annual with no couponCode).
+    // Kept for admin-side/test use of enrol() with an explicit code.
     const check = validateCoupon({
       code: couponCode, planId: planRow.id, customerId: null,
       priceCents: planRow.price_cents,

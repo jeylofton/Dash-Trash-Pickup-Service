@@ -121,9 +121,14 @@ router.get('/plans', (req, res) => {
      WHERE s.customer_id = ? AND s.status != 'cancelled' ORDER BY s.id DESC LIMIT 1`, req.customer.id);
 
   // An introductory customer keeps their locked price. Show it, but do not
-  // offer the introductory plan to anyone who is not already on it.
+  // offer the introductory plan to anyone who is not already on it. The
+  // Introductory plans row itself is deactivated (Task 8 — it is a
+  // promotion on Monthly now, not a selectable plan), so it must be
+  // included here by id even though `active = 0`, or an existing
+  // introductory customer's current plan would vanish from their own
+  // dashboard.
   const available = all(`SELECT id, code, name, interval_months, price_cents, is_intro
-                           FROM plans WHERE active = 1`)
+                           FROM plans WHERE active = 1 OR id = ?`, current?.plan_id ?? -1)
     .filter(p => !p.is_intro || current?.code === 'Introductory')
     .map(p => ({
       code: p.code, name: p.name, intervalMonths: p.interval_months,
@@ -176,7 +181,10 @@ router.get('/payments', (req, res) => {
 /** Change plan. The introductory price is never silently lost or granted. */
 router.post('/plan/change', (req, res) => {
   const { planCode } = req.body || {};
-  const plan = one('SELECT * FROM plans WHERE code = ? AND active = 1', planCode);
+  // The deactivated Introductory row must still resolve here (rather than
+  // 404-ing as "not available") so the explicit intro-block check below
+  // fires with its specific message instead of a generic one.
+  const plan = one(`SELECT * FROM plans WHERE code = ? AND (active = 1 OR code = 'Introductory')`, planCode);
   if (!plan) return res.status(400).json({ error: 'That plan is not available.' });
 
   const current = one(`
