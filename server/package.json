@@ -8,9 +8,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "square:setup": "node bin/square-setup.js --env=sandbox",
-    "square:setup:prod": "node bin/square-setup.js --env=production",
-    "square:check": "node bin/square-setup.js --env=sandbox --dry-run"
+    "test": "node --test test/**/*.test.js"
   },
   "engines": {
     "node": ">=18"
