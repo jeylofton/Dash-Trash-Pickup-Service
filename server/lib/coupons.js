@@ -121,34 +121,42 @@ export function validate({ code, planId, customerId, priceCents, alreadyApplied 
 }
 
 /**
- * Record a completed redemption. Call ONLY after payment succeeds.
- * Re-checks the limit inside the transaction so two simultaneous
- * checkouts cannot both take the last spot.
+ * Record a completed redemption. MUST be called from inside a transaction
+ * already opened by the caller (tx() has no savepoint support, so this
+ * cannot open its own). Re-checks the limit against the caller's own
+ * transaction so two simultaneous checkouts cannot both take the last spot.
  */
-export function redeem({ couponId, customerId, subscriptionId, paymentId, priceCents, type }) {
-  return tx(() => {
-    const coupon = one('SELECT * FROM coupons WHERE id = ?', couponId);
-    if (!coupon) throw Object.assign(new Error('Coupon not found.'), { status: 404 });
+export function redeemWithin({ couponId, customerId, subscriptionId, paymentId, priceCents, type }) {
+  const coupon = one('SELECT * FROM coupons WHERE id = ?', couponId);
+  if (!coupon) throw Object.assign(new Error('Coupon not found.'), { status: 404 });
 
-    const used = one(`SELECT COUNT(*) AS n FROM coupon_redemptions
-                       WHERE coupon_id = ? AND status = 'completed'`, couponId).n;
-    if (coupon.max_redemptions != null && used >= coupon.max_redemptions) {
-      throw Object.assign(new Error('That promotion just reached its limit.'),
-                          { status: 409, code: 'COUPON_LIMIT_REACHED' });
-    }
+  const used = one(`SELECT COUNT(*) AS n FROM coupon_redemptions
+                     WHERE coupon_id = ? AND status = 'completed'`, couponId).n;
+  if (coupon.max_redemptions != null && used >= coupon.max_redemptions) {
+    throw Object.assign(new Error('That promotion just reached its limit.'),
+                        { status: 409, code: 'COUPON_LIMIT_REACHED' });
+  }
 
-    const quote = computeDiscount(coupon, priceCents);
-    const id = run(
-      `INSERT INTO coupon_redemptions
-         (coupon_id, customer_id, subscription_id, payment_id,
-          original_price_cents, discount_cents, final_price_cents, customer_type)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      couponId, customerId, subscriptionId ?? null, paymentId ?? null,
-      quote.originalCents, quote.discountCents, quote.finalCents,
-      type || customerType(customerId)).lastInsertRowid;
+  const quote = computeDiscount(coupon, priceCents);
+  const id = run(
+    `INSERT INTO coupon_redemptions
+       (coupon_id, customer_id, subscription_id, payment_id,
+        original_price_cents, discount_cents, final_price_cents, customer_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    couponId, customerId, subscriptionId ?? null, paymentId ?? null,
+    quote.originalCents, quote.discountCents, quote.finalCents,
+    type || customerType(customerId)).lastInsertRowid;
 
-    return { id, ...quote };
-  });
+  return { id, ...quote };
+}
+
+/**
+ * Record a completed redemption. Call ONLY after payment succeeds.
+ * Wraps redeemWithin() in its own transaction for callers that do not
+ * already have one open (kept for signature/behaviour compatibility).
+ */
+export function redeem(args) {
+  return tx(() => redeemWithin(args));
 }
 
 /** The active launch promotion, if one is configured. */

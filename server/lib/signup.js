@@ -10,7 +10,7 @@
 import { payments, providerName } from './payments/index.js';
 import { hashPassword, passwordProblem } from './auth.js';
 import { tx, one, run } from '../db/index.js';
-import { validate as validateCoupon, redeem as redeemCoupon, introCoupon } from './coupons.js';
+import { validate as validateCoupon, redeemWithin, introCoupon } from './coupons.js';
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -146,11 +146,22 @@ export async function enrol(input) {
   } catch (err) {
     run(`UPDATE payments SET status = 'failed', failure_reason = ? WHERE id = ?`,
         payments.describeError(err), ids.paymentId);
+    // No charge went through, so no promotion was granted - the frozen
+    // promotional terms from transaction A must not survive onto a
+    // subscription that never actually paid for them.
+    run(`UPDATE subscriptions SET promo_price_cents = NULL,
+                                  promo_periods_remaining = NULL
+          WHERE id = ?`, ids.subscriptionId);
     return { ok: false, ...ids, status: 'failed', introApplied: false,
              error: payments.describeError(err) };
   }
 
-  /* ---- transaction B: record the outcome ---- */
+  /* ---- transaction B: record the outcome, and - when paid - the
+     redemption, atomically. redeemWithin() must run inside THIS
+     transaction (not its own): if the process dies, or the coupon
+     limit was hit, between marking the payment paid and recording the
+     redemption, an uncounted promotional spot could otherwise be
+     handed out past the 100-spot cap. ---- */
   let introApplied = false;
   tx(() => {
     run(`UPDATE payments SET status = ?, provider_payment_id = ?,
@@ -165,37 +176,41 @@ export async function enrol(input) {
       next.setMonth(next.getMonth() + planRow.interval_months);
       run(`UPDATE subscriptions SET status = 'active', next_billing_date = ?
             WHERE id = ?`, next.toISOString().slice(0, 10), ids.subscriptionId);
-    }
-  });
 
-  // Redemption happens only after a paid charge is committed, and only
-  // now - checking a code earlier changes nothing. redeem() opens its own
-  // transaction and re-checks the redemption limit inside it, so two
-  // simultaneous signups racing for the last spot cannot both win it; it
-  // must not be nested inside transaction B's own transaction.
-  if (charge.status === 'paid' && couponQuote) {
-    try {
-      redeemCoupon({
-        couponId: couponQuote.coupon.id,
-        customerId: ids.customerId,
-        subscriptionId: ids.subscriptionId,
-        paymentId: ids.paymentId,
-        priceCents: planRow.price_cents,
-        type: 'new',
-      });
-      run(`UPDATE customers SET is_intro = 1 WHERE id = ?`, ids.customerId);
-      introApplied = true;
-    } catch (err) {
-      if (err.code !== 'COUPON_LIMIT_REACHED') throw err;
-      // The spot was taken between validation and completion. The
-      // customer was already charged the promotional amount for this
-      // first period - that stands, they were quoted it - but no ongoing
-      // promotion was granted, so the frozen terms come off.
+      if (couponQuote) {
+        try {
+          redeemWithin({
+            couponId: couponQuote.coupon.id,
+            customerId: ids.customerId,
+            subscriptionId: ids.subscriptionId,
+            paymentId: ids.paymentId,
+            priceCents: planRow.price_cents,
+            type: 'new',
+          });
+          run(`UPDATE customers SET is_intro = 1 WHERE id = ?`, ids.customerId);
+          introApplied = true;
+        } catch (err) {
+          if (err.code !== 'COUPON_LIMIT_REACHED') throw err;
+          // The spot was taken between validation and completion. The
+          // customer was already charged the promotional amount for this
+          // first period - that stands, they were quoted it - but no
+          // ongoing promotion was granted, so the frozen terms come off.
+          // Caught here (inside the transaction) rather than rethrown so
+          // the payment/activation writes above still COMMIT - only the
+          // promotional terms are reverted, not the successful charge.
+          run(`UPDATE subscriptions SET promo_price_cents = NULL,
+                                        promo_periods_remaining = NULL
+                WHERE id = ?`, ids.subscriptionId);
+        }
+      }
+    } else {
+      // Declined/failed charge: no promotion was granted, so the frozen
+      // promotional terms from transaction A must not linger.
       run(`UPDATE subscriptions SET promo_price_cents = NULL,
                                     promo_periods_remaining = NULL
             WHERE id = ?`, ids.subscriptionId);
     }
-  }
+  });
 
   // Informational only, read fresh after any redemption above - never used
   // to decide anything for THIS signup, which was already decided.
