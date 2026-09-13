@@ -522,7 +522,9 @@
     const badge = $('[data-confirm-badge]');
     if (badge) badge.hidden = !res.demo;
     $('[data-confirm-body]').textContent = introApplied
-      ? `Confirmation ${res.confirmationId}. You're one of the first ${CONFIG.intro.totalSpots} customers at ${money(res.amountCents / 100)}/month. Standard pickup is ${scheduleDays()}.`
+      // The spot count follows the live promotion, never CONFIG - the admin
+      // can change the limit, and the confirmation must not quote a stale one.
+      ? `Confirmation ${res.confirmationId}. You're one of the first ${spotsState.totalSpots ?? CONFIG.intro.totalSpots} customers at ${money(res.amountCents / 100)}/month. Standard pickup is ${scheduleDays()}.`
       : `Confirmation ${res.confirmationId}. We'll email ${v.email || 'you'} with your pickup schedule. Standard pickup is ${scheduleDays()}.`;
     const pendingNote = $('[data-confirm-pending]');
     if (pendingNote) pendingNote.hidden = !pending;
