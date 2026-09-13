@@ -19,7 +19,6 @@ if (RESET) {
   db.exec('PRAGMA foreign_keys = OFF');
   for (const t of tables) db.exec(`DELETE FROM ${t}`);
   db.exec(`DELETE FROM sqlite_sequence`);
-  db.exec(`UPDATE intro_counter SET claimed = 0`);
   db.exec('PRAGMA foreign_keys = ON');
   console.log('  reset: all data cleared');
 }
@@ -155,7 +154,10 @@ tx(() => {
     }
   });
 
-  run(`UPDATE intro_counter SET claimed = ?`, introUsed);
+  // intro_counter is dead: live signups move coupon_redemptions instead
+  // (see /api/intro-spots and admin.js's overview route), so this demo
+  // data no longer writes to it - the table is left in the schema but
+  // unread and unwritten, and is removable.
 
   /* ---- routes ---- */
   const routeDefs = [
@@ -193,7 +195,7 @@ console.log(`
     units          ${count('units')}
     routes         ${count('routes')}
     subscriptions  ${count('subscriptions')}
-    intro claimed  ${one('SELECT claimed FROM intro_counter').claimed}
+    intro claimed  ${one(`SELECT COUNT(*) AS n FROM coupon_redemptions WHERE status='completed'`).n}
 
   Sign in with password: ${DEMO_PASSWORD}
     admin@dashtrashpickup.com     (admin)

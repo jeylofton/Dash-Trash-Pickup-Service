@@ -51,8 +51,21 @@ export async function enrol(input) {
   const pwProblem = passwordProblem(password);
   if (pwProblem) return { ok: false, error: pwProblem };
 
-  if (one(`SELECT id FROM users WHERE email = ?`, email)) {
-    return { ok: false, error: 'An account already exists for that email address.' };
+  // An existing row for this email only blocks a new signup when it
+  // belongs to a real customer - one with at least one paid payment. A row
+  // left behind by an attempt that never charged anyone (declined, failed,
+  // or abandoned mid-flow) is a shell, not a customer, and must not burn
+  // the email address forever.
+  let staleUserId = null;
+  const existingUser = one(`SELECT id FROM users WHERE email = ?`, email);
+  if (existingUser) {
+    const hasPaid = one(
+      `SELECT 1 FROM payments p JOIN customers c ON c.id = p.customer_id
+        WHERE c.user_id = ? AND p.status = 'paid' LIMIT 1`, existingUser.id);
+    if (hasPaid) {
+      return { ok: false, error: 'An account already exists for that email address.' };
+    }
+    staleUserId = existingUser.id;
   }
 
   // The introductory rate is a PROMOTION on the Monthly plan, not a plan of
@@ -70,7 +83,7 @@ export async function enrol(input) {
   const passwordHash = await hashPassword(password);
 
   // A pre-check only — it changes nothing. The real, race-safe check
-  // happens inside redeem() in transaction B, after payment succeeds.
+  // happens inside redeemWithin() in transaction B, after payment succeeds.
   // customerId is null here because no customer row exists yet.
   let couponQuote = null;
   if (isIntroRequest) {
@@ -107,6 +120,12 @@ export async function enrol(input) {
 
   /* ---- transaction A: every record, nothing charged yet ---- */
   const ids = tx(() => {
+    // Clear the abandoned shell before reusing its email - cascades remove
+    // its customer/subscription/payment rows too (see schema.sql), and
+    // this must happen inside the same transaction as the new user insert
+    // so a crash between the two can never leave the email unusable.
+    if (staleUserId) run(`DELETE FROM users WHERE id = ?`, staleUserId);
+
     const unitId = resolveUnit({ community, street, unit, zip });
 
     const userId = run(
@@ -181,7 +200,7 @@ export async function enrol(input) {
                                   promo_periods_remaining = NULL
           WHERE id = ?`, ids.subscriptionId);
     return { ok: false, ...ids, status: 'failed', introApplied: false,
-             error: payments.describeError(err) };
+             amountCents: priceCents, error: payments.describeError(err) };
   }
 
   /* ---- transaction B: record the outcome, and - when paid - the
@@ -231,13 +250,17 @@ export async function enrol(input) {
                 WHERE id = ?`, ids.subscriptionId);
         }
       }
-    } else {
+    } else if (charge.status === 'failed') {
       // Declined/failed charge: no promotion was granted, so the frozen
       // promotional terms from transaction A must not linger.
       run(`UPDATE subscriptions SET promo_price_cents = NULL,
                                     promo_periods_remaining = NULL
             WHERE id = ?`, ids.subscriptionId);
     }
+    // else: pending. Nothing settled yet either way - the subscription
+    // stays 'pending' (its default from transaction A) and the frozen
+    // promotional terms are left exactly as granted, so a charge that
+    // later clears still honors the 12-month $18 term it was quoted.
   });
 
   // Informational only, read fresh after any redemption above - never used
@@ -249,8 +272,12 @@ export async function enrol(input) {
     ...ids,
     status: charge.status,
     introApplied,
+    amountCents: priceCents,
     remainingSpots: launch ? launch.remaining : null,
-    error: charge.status === 'paid' ? undefined
-      : charge.failureReason || 'The payment did not complete.',
+    // Pending is not a failure - leave error unset so callers do not show
+    // it as one; only an actually failed/declined charge gets a message.
+    error: charge.status === 'failed'
+      ? (charge.failureReason || 'The payment did not complete.')
+      : undefined,
   };
 }

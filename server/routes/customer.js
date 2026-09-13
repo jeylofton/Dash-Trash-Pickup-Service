@@ -91,7 +91,13 @@ router.get('/account', (req, res) => {
       plan: subscription.plan_name,
       planCode: subscription.plan_code,
       intervalMonths: subscription.interval_months,
-      price: money(subscription.locked_price_cents),
+      // The price actually in effect: the frozen promotional rate while
+      // the term still has periods left, otherwise the standard rate.
+      // locked_price_cents alone would show $28 to a customer paying $18.
+      price: money(subscription.promo_periods_remaining > 0
+        ? subscription.promo_price_cents : subscription.locked_price_cents),
+      lockedPrice: money(subscription.locked_price_cents),
+      promoPeriodsRemaining: subscription.promo_periods_remaining,
       status: subscription.status,
       nextBillingDate: subscription.next_billing_date,
       startedAt: subscription.started_at,
@@ -134,7 +140,19 @@ router.get('/plans', (req, res) => {
       code: p.code, name: p.name, intervalMonths: p.interval_months,
       price: money(p.price_cents), isIntro: Boolean(p.is_intro),
       isCurrent: current?.plan_id === p.id,
-      lockedPrice: current?.plan_id === p.id ? money(current.locked_price_cents) : null,
+      // The price this customer actually pays right now - the frozen
+      // promotional rate while its term still has periods left, otherwise
+      // the standard rate. Showing locked_price_cents alone here is what
+      // told an $18/mo customer their price was $28.
+      lockedPrice: current?.plan_id === p.id
+        ? money(current.promo_periods_remaining > 0 ? current.promo_price_cents : current.locked_price_cents)
+        : null,
+      // The standard rate this promotional price reverts to, and how many
+      // billing periods remain at the promotional rate - only present
+      // while a promotional term is still active.
+      afterPrice: current?.plan_id === p.id && current.promo_periods_remaining > 0
+        ? money(current.locked_price_cents) : null,
+      promoPeriodsRemaining: current?.plan_id === p.id ? current.promo_periods_remaining : null,
     }));
 
   res.json({ plans: available, currentPlanCode: current?.code ?? null });

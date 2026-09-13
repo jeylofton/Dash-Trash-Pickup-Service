@@ -104,7 +104,8 @@ async function loadCustomers() {
       <td class="small">${esc(c.community_name || 'Standalone')}<br />
           <span class="muted">${esc(c.unit_label || '—')}</span></td>
       <td>${esc(c.plan_code || '—')}</td>
-      <td class="num">${money(c.price)}</td>
+      <td class="num">${money(c.price)}${c.afterPrice
+        ? `<br /><span class="muted small">then ${money(c.afterPrice)}</span>` : ''}</td>
       <td>${c.subscription_status ? statusPill(c.subscription_status) : '—'}</td>
       <td>${statusPill(c.status)}</td>
     </tr>`).join(''));

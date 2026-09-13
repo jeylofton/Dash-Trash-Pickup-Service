@@ -158,6 +158,20 @@ app.get('/api/service-area', (req, res) => {
 app.post('/api/checkout', rateLimit, async (req, res) => {
   const result = await enrol({ ...req.body, outcome: req.body.outcome || 'success' });
   if (!result.ok) {
+    // Pending is not a failure - the charge just hasn't settled yet, and
+    // the subscription kept whatever promotional terms it was quoted. A
+    // 4xx here would read as an error to the client when nothing failed.
+    if (result.status === 'pending') {
+      return res.status(202).json({
+        ok: false,
+        status: 'pending',
+        message: "Your payment is still processing. We'll confirm once it clears.",
+        confirmationId: result.paymentId,
+        subscriptionId: result.subscriptionId,
+        introApplied: result.introApplied,
+        amountCents: result.amountCents,
+      });
+    }
     return res.status(result.status === 'failed' ? 402 : 400)
               .json({ ok: false, error: result.error, status: result.status });
   }
@@ -167,6 +181,12 @@ app.post('/api/checkout', rateLimit, async (req, res) => {
     confirmationId: result.paymentId,
     subscriptionId: result.subscriptionId,
     status: result.status,
+    // What was actually decided and charged server-side - the client must
+    // show this, not derive its own guess from the plan it asked for (a
+    // visitor past the promotion's 100-spot cap is charged 2800 even
+    // though they requested the Introductory plan).
+    introApplied: result.introApplied,
+    amountCents: result.amountCents,
   });
 });
 

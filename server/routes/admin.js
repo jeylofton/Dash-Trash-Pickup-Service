@@ -23,8 +23,6 @@ router.get('/overview', (req, res) => {
     `SELECT COUNT(*) AS n FROM customers c
        JOIN subscriptions s ON s.customer_id = c.id AND s.status IN ('active','past_due')
       WHERE c.is_intro = 1 AND c.status = 'active'`).n;
-  const intro = one('SELECT claimed, total FROM intro_counter');
-
   const employeesAssigned = one(
     `SELECT COUNT(DISTINCT ra.employee_id) AS n
        FROM route_assignments ra
@@ -41,8 +39,13 @@ router.get('/overview', (req, res) => {
       SUM(CASE WHEN status='failed'   THEN 1 ELSE 0 END) AS failed
     FROM payments`);
 
+  // A promotional subscription still on its 12-month term bills at
+  // promo_price_cents, not locked_price_cents - counting the standard rate
+  // here would overstate MRR for every customer currently paying $18.
   const mrrCents = one(`
-    SELECT COALESCE(SUM(CAST(s.locked_price_cents AS REAL) / p.interval_months), 0) AS c
+    SELECT COALESCE(SUM(
+      CAST(CASE WHEN s.promo_periods_remaining > 0 THEN s.promo_price_cents ELSE s.locked_price_cents END AS REAL)
+      / p.interval_months), 0) AS c
       FROM subscriptions s JOIN plans p ON p.id = s.plan_id
      WHERE s.status = 'active'`).c;
 
@@ -102,7 +105,16 @@ router.get('/overview', (req, res) => {
         : Math.max(0, introCoupon.max_redemptions - introUsed),
     } : null,
     customers: { active: activeCustomers, introActive },
-    intro: { claimed: intro.claimed, total: intro.total, remaining: Math.max(intro.total - intro.claimed, 0) },
+    // Live source, same one /api/intro-spots uses and the same value as
+    // `promotion` above - intro_counter is written only by the seed
+    // script and drifts from real signups immediately, so the tile must
+    // never read it. (intro_counter itself is left in the schema for now;
+    // it is dead and removable.)
+    intro: introCoupon ? {
+      claimed: introUsed, total: introCoupon.max_redemptions,
+      remaining: introCoupon.max_redemptions == null ? null
+        : Math.max(0, introCoupon.max_redemptions - introUsed),
+    } : { claimed: 0, total: null, remaining: null },
     employeesAssigned,
     payments: {
       collectedDollars: money(pay.paid_cents || 0),
@@ -129,7 +141,8 @@ router.get('/customers', (req, res) => {
            u.first_name, u.last_name, u.email, u.phone,
            un.id AS unit_id, un.label AS unit_label,
            com.id AS community_id, com.name AS community_name,
-           p.code AS plan_code, sub.locked_price_cents, sub.status AS subscription_status,
+           p.code AS plan_code, sub.locked_price_cents, sub.promo_price_cents,
+           sub.promo_periods_remaining, sub.status AS subscription_status,
            sub.next_billing_date
       FROM customers c
       JOIN users u ON u.id = c.user_id
@@ -143,7 +156,19 @@ router.get('/customers', (req, res) => {
      LIMIT ? OFFSET ?`;
 
   const rows = all(sql, ...params, Number(limit), Number(offset));
-  res.json(rows.map(r => ({ ...r, price: r.locked_price_cents != null ? money(r.locked_price_cents) : null })));
+  res.json(rows.map(r => {
+    // The price actually in effect: the frozen promotional rate while its
+    // term still has periods left, otherwise the standard rate - showing
+    // locked_price_cents alone here told the owner every $18 customer was
+    // paying $28.
+    const onPromo = r.promo_periods_remaining > 0;
+    return {
+      ...r,
+      price: r.locked_price_cents != null
+        ? money(onPromo ? r.promo_price_cents : r.locked_price_cents) : null,
+      afterPrice: onPromo ? money(r.locked_price_cents) : null,
+    };
+  }));
 });
 
 router.get('/customers/:id', (req, res) => {

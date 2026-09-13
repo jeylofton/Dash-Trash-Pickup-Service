@@ -67,6 +67,8 @@ test('4: at the coupon limit, an introductory signup succeeds at the standard pr
   const r = await enrol({ ...base, email: 'wiz-d@test.local', outcome: 'success' });
   assert.equal(r.ok, true);
   assert.equal(r.introApplied, false);
+  assert.equal(r.amountCents, 2800,
+    'the server must charge (and report charging) the standard rate once the promotion is exhausted');
 
   const sub = one(`SELECT * FROM subscriptions WHERE id = ?`, r.subscriptionId);
   assert.equal(sub.locked_price_cents, 2800);

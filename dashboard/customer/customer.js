@@ -49,6 +49,7 @@ async function loadPlan() {
     <h2>${esc(current.name)} ${account.account.isIntro ? '<span class="pill intro">Introductory rate</span>' : ''}</h2>
     <p class="stat-value" style="color:var(--orange-dark)">${money(current.lockedPrice ?? current.price)}
       <span class="small muted">/ ${current.intervalMonths === 1 ? 'month' : current.intervalMonths + ' months'}</span></p>
+    ${current.afterPrice ? `<p class="small">then ${money(current.afterPrice)}/mo after ${current.promoPeriodsRemaining} more billing period${current.promoPeriodsRemaining === 1 ? '' : 's'}.</p>` : ''}
     ${account.account.isIntro ? `<p class="small">Your promotional price is locked in and will not change
       when standard pricing changes.</p>` : ''}`
     : '<p class="muted">No active plan.</p>';

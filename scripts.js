@@ -155,10 +155,12 @@
   async function fetchIntroSpots() {
     if (CONFIG.api.enabled) {
       try { return await api('/api/intro-spots'); }
-      catch (err) { console.warn('[Dash] spot count unavailable, using demo count.', err.message); }
+      catch (err) { console.warn('[Dash] spot count unavailable.', err.message); }
     }
-    const local = Number(localStorage.getItem('dtp_demo_signups') || 0);
-    return { claimed: Math.min(27 + local, CONFIG.intro.totalSpots) };
+    // No real count to show. Inventing one (a scarcity number) would show
+    // a visitor a fabricated figure, so this reports "unknown" instead and
+    // renderSpots() hides the spots-remaining text rather than guessing.
+    return { claimed: null };
   }
 
   async function checkServiceArea(zip) {
@@ -236,13 +238,20 @@
 
   async function renderSpots() {
     const { claimed } = await fetchIntroSpots();
-    const remaining = Math.max(CONFIG.intro.totalSpots - claimed, 0);
-    spotsState = { claimed, remaining, soldOut: remaining === 0 };
+    const unavailable = claimed == null;
+    const remaining = unavailable ? null : Math.max(CONFIG.intro.totalSpots - claimed, 0);
+    // Unknown is not the same as sold out - without a real count, assume
+    // the offer is still open rather than hiding it on a guess; checkout
+    // itself is still the authority on whether a spot is actually granted.
+    spotsState = { claimed, remaining, soldOut: !unavailable && remaining === 0 };
 
     $$('[data-spots-remaining]').forEach(el => {
-      el.textContent = remaining > 0
-        ? `${remaining} introductory spots remaining.`
-        : 'All introductory spots have been claimed.';
+      el.hidden = unavailable;
+      if (!unavailable) {
+        el.textContent = remaining > 0
+          ? `${remaining} introductory spots remaining.`
+          : 'All introductory spots have been claimed.';
+      }
     });
 
     const block = $('[data-intro-block]');
@@ -460,16 +469,26 @@
     }
 
     next.disabled = false;
-    if (!res || !res.ok) {
+
+    // A pending charge is not a failure - the server hands back a 202 with
+    // status: 'pending' rather than an error, and the subscription kept
+    // whatever terms it was quoted. Show it as informational on the
+    // confirmation step, not as a red error.
+    const pending = res && res.status === 'pending';
+    if (!res || (!res.ok && !pending)) {
       next.textContent = 'Complete signup';
-      showPaymentError(res?.error || 'Something went wrong. Please try again.');
+      showPaymentError(res?.error || res?.message || 'Something went wrong. Please try again.');
       return;
     }
 
     await renderSpots();
 
-    const planKey = PLAN_KEY[v.plan];
-    const introApplied = planKey === 'intro';
+    // THE SERVER DECIDES, NOT THE CLIENT: what the customer actually paid
+    // (and whether the promotion applied) is whatever the server charged,
+    // never a guess derived from the plan the customer merely asked for -
+    // a visitor arriving after the 100th spot is billed the standard rate
+    // even though they picked "Introductory".
+    const introApplied = Boolean(res.introApplied);
 
     $('[data-confirm-heading]').textContent = introApplied
       ? 'Your introductory rate is locked in'
@@ -477,8 +496,10 @@
     const badge = $('[data-confirm-badge]');
     if (badge) badge.hidden = !res.demo;
     $('[data-confirm-body]').textContent = introApplied
-      ? `Confirmation ${res.confirmationId}. You're one of the first ${CONFIG.intro.totalSpots} customers at ${money(CONFIG.intro.price)}/month. Standard pickup is ${scheduleDays()}.`
+      ? `Confirmation ${res.confirmationId}. You're one of the first ${CONFIG.intro.totalSpots} customers at ${money(res.amountCents / 100)}/month. Standard pickup is ${scheduleDays()}.`
       : `Confirmation ${res.confirmationId}. We'll email ${v.email || 'you'} with your pickup schedule. Standard pickup is ${scheduleDays()}.`;
+    const pendingNote = $('[data-confirm-pending]');
+    if (pendingNote) pendingNote.hidden = !pending;
 
     showStep(LAST_STEP);
   }
