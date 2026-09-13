@@ -1,88 +1,82 @@
 # Dash Trash Pickup
 
-A marketing and signup website for **Dash Trash Pickup**, a doorstep valet trash
-collection service for apartment and townhome communities in Columbus, Georgia.
+A marketing site, customer signup flow, and role-based operations dashboard for
+**Dash Trash Pickup**, a doorstep valet trash collection service for apartment
+and townhome communities.
 
 > _Your trash. Our dash._ — residents leave tied household trash outside their
 > door twice a week, and we carry it to the community dumpster so they don't
 > have to.
 
-The website is plain HTML, CSS, and JavaScript with no framework and no build
-step. Payments run on a small Node + Express server, currently backed by a
-demo provider that simulates a processor and moves no real money.
+The public site is plain HTML, CSS, and JavaScript with no framework and no
+build step. It is served by a small Node + Express application server that also
+runs the API, the dashboard, and the database. Payments currently run on a
+built-in **demo provider** that simulates a processor and moves no real money.
+
+The application is self-contained: one command installs it, one command runs it.
+It needs **only Node.js and npm** — no particular editor, IDE, or extension.
 
 ---
 
 ## Contents
 
-- [What's in it](#whats-in-it)
-- [Running it locally](#running-it-locally)
-- [Project structure](#project-structure)
-- [Configuration](#configuration) ← **edit pricing here**
-- [How the first-100 offer works](#how-the-first-100-offer-works)
-- [Payments (demo provider)](#payments-demo-provider)
-- [Dashboard (admin / employee / customer)](#dashboard-admin--employee--customer)
-- [Deploying](#deploying)
+- [Requirements](#requirements)
+- [Local development](#local-development)
+- [Production deployment](#production-deployment)
+- [Environment variables](#environment-variables)
+- [Database setup](#database-setup)
+- [Payment provider](#payment-provider)
+- [First-run setup](#first-run-setup)
+- [Backups](#backups)
+- [Security](#security)
+- [Pricing configuration](#pricing-configuration) ← **edit pricing here**
+- [Feature reference](#feature-reference)
+  - [What's in it](#whats-in-it)
+  - [How the first-100 offer works](#how-the-first-100-offer-works)
+  - [Payments (demo provider)](#payments-demo-provider)
+  - [Dashboard (admin / employee / customer)](#dashboard-admin--employee--customer)
+  - [Financials, payroll and profitability](#financials-payroll-and-profitability)
+  - [Employee management and accounts](#employee-management-and-accounts)
+  - [Coupons and service credits](#coupons-and-service-credits)
+  - [Community lifecycle and service verification](#community-lifecycle-and-service-verification)
+  - [Admin control: archiving, route versioning, custom roles](#admin-control-archiving-route-versioning-custom-roles)
+  - [Cancel, Delete, and Archive](#cancel-delete-and-archive)
 - [Before launch](#before-launch)
 - [Tech notes](#tech-notes)
+- [Development tools (optional)](#development-tools-optional)
 
 ---
 
-## What's in it
+## Requirements
 
-| Feature                   | Notes                                                                             |
-| ------------------------- | --------------------------------------------------------------------------------- |
-| Responsive marketing page | Hero, how-it-works, audience cards, FAQ, contact                                  |
-| Promotional coupon modal  | Limited introductory offer, dismissible, remembered for 7 days                    |
-| Three pricing plans       | Monthly, quarterly, annual — all calculated from one config value                 |
-| Six-step signup flow      | Plan → Info → Address → Availability → Payment → Confirmation                     |
-| Service-area check        | Validates the customer's ZIP against a service list                               |
-| SEO + social metadata     | Open Graph tags, canonical URL, `LocalBusiness` JSON-LD                           |
-| Accessibility             | Keyboard-navigable modal with focus trapping, ARIA states, reduced-motion support |
+To run the application you need:
+
+| Requirement | Version | Notes |
+|---|---|---|
+| **Node.js** | **22 or newer** | The database uses `node:sqlite`, which is built into Node 22+. Node 18/20 will not run it. |
+| **npm** | bundled with Node | Installs the two runtime dependencies. |
+
+That is the entire list. The application does **not** require any editor, IDE,
+AI assistant, or browser extension to install, build, run, or deploy. It runs
+from a plain command line on any standard Node host — a VPS, a container, or a
+Node-capable cloud platform.
+
+Runtime dependencies are just `express` and `dotenv`. SQLite is built into Node,
+so there is no native module to compile and no database server to install.
 
 ---
 
-## Running it locally
-
-One command runs everything — the public site, the dashboard, and the API all
-serve from the same port.
-
-### In VS Code
-
-1. **File → Open Folder** → select the `columbus-valet-trash` folder
-   (open *this* folder, not its parent — the configs use `${workspaceFolder}`)
-2. Open a terminal with **Ctrl+`** and run the one-time setup:
-   ```bash
-   cd server
-   npm install
-   cp .env.example .env
-   node db/seed.js
-   ```
-3. Press **F5**, or Run → Start Debugging, and pick **Run Dash Trash Pickup**
-4. VS Code opens <http://localhost:3000> automatically
-
-Breakpoints work: click in the gutter of any file in `server/` and the debugger
-stops there.
-
-**Other launch configurations** (the dropdown in the Run panel):
-
-| Configuration | Does |
-|---|---|
-| Run Dash Trash Pickup | Normal start, reads `server/.env` |
-| Run (no .env file yet) | Same, but works before you create `.env` |
-| Seed demo data | Adds demo data if the database is empty |
-| Seed demo data (RESET) | **Wipes everything** and rebuilds |
-
-**Tasks** (Ctrl+Shift+P → *Tasks: Run Task*) cover the same ground without the
-debugger, including **Setup: install + seed + start** which chains all three.
-
-### From any terminal
+## Local development
 
 ```bash
-cd server && npm install && node db/seed.js && npm start
+cd server
+npm install            # install dependencies
+cp .env.example .env    # PAYMENT_PROVIDER=demo is already set
+node db/seed.js         # create + seed the database (add --reset to rebuild)
+npm run dev             # start with auto-restart + browser live-reload
 ```
 
-### What you get
+Then open:
 
 | URL | |
 |---|---|
@@ -90,70 +84,232 @@ cd server && npm install && node db/seed.js && npm start
 | <http://localhost:3000/dashboard/login.html> | Sign in (all three roles) |
 | <http://localhost:3000/api/health> | API check |
 
-> **Not port 5000 on macOS.** AirPlay Receiver holds it and returns a confusing
-> `403`. This app uses 3000, so you only hit that if you change `PORT`.
+One process serves everything — the public site, the dashboard, and the API all
+answer on the same port. There is no second server to start and nothing serves
+the frontend separately.
 
-Stop the server with **Ctrl+C**, or the red stop button in the debug toolbar.
+**Live reload.** In development the server refreshes open browser tabs when you
+save an `.html`, `.css`, or `.js` file. It works by injecting a tiny snippet
+into HTML *as it is served*, so nothing dev-only is ever written into the source
+files. It turns itself off automatically when `NODE_ENV=production`; set
+`DEV_RELOAD=0` to turn it off during development too.
 
-> ### Do not use Live Server
->
-> Right-clicking an HTML file → *Open with Live Server* serves the page on
-> port 5500, but Live Server only handles GET. Sign-in is a POST, so it fails
-> with **`Request failed (405)`** — which looks like a wrong password but is not.
->
-> Live Server cannot run this app on any port: it is a static file server, and
-> the API only exists inside the Node process. Always open
-> **<http://localhost:3000>**.
+**Backend auto-restart.** `npm run dev` uses `node --watch` to restart the
+server when you edit server code. Use plain `npm start` if you don't want that.
 
-### Live reload (the part of Live Server worth keeping)
+> **Avoid port 5000 on macOS.** AirPlay Receiver holds it and returns a
+> confusing `403`. This app uses 3000; you only hit that if you set `PORT=5000`.
 
-The dev server refreshes the browser on save by itself — no extension needed.
-Edit any `.html`, `.css`, or `.js` file and every open page reloads.
-
-It works by injecting a tiny `EventSource` snippet into HTML **as it is served**,
-so nothing dev-only ever lives in the committed files. It turns itself off when
-`NODE_ENV=production` (verified: no snippet, and `/__dev/reload` returns 404).
-
-To disable it in development, set `DEV_RELOAD=0`.
-
-For backend changes, `npm run dev` restarts the server on save:
-
-```bash
-cd server && npm run dev
-```
-
-## Project structure
-
-```
-.
-├── index.html          # page markup
-├── styles.css          # all styling, 24 numbered sections
-├── scripts.js          # all behavior, config at the top
-├── README.md
-├── .gitignore
-├── server/             # payment + dashboard backend (Node + Express)
-│   ├── server.js       #   API routes
-│   ├── lib/payments/   #   demo payment provider
-│   ├── .env.example    #   copy to .env and fill in
-│   └── package.json
-└── images/
-    ├── townhomes-hero.jpg      # hero background
-    ├── valet-trash-pickup.jpg  # service photo
-    ├── columbus-aerial.jpg     # service-area photo
-    └── logo/
-        ├── Dash_Trash_Logo.png   # full logo (light backgrounds)
-        ├── mark-128-dark.png     # icon recolored for the dark header
-        ├── favicon-32.png        # browser tab icon
-        ├── apple-touch-icon.png  # iOS home-screen icon
-        └── og-image.jpg          # link-preview image
-```
-
-Both `styles.css` and `scripts.js` open with a table of contents listing their
-numbered sections, so you can jump straight to the part you want.
+Stop the server with **Ctrl+C**.
 
 ---
 
-## Configuration
+## Production deployment
+
+A new owner can deploy without any of the development tooling. On a server with
+Node 22+ and npm:
+
+```bash
+# 1. Get the code onto the server (git clone or an uploaded copy)
+cd server
+
+# 2. Install runtime dependencies only (skips devDependencies)
+npm install --omit=dev
+
+# 3. Configure the environment (see "Environment variables")
+cp .env.example .env
+#   edit .env: set NODE_ENV=production, PORT, DB_PATH, UPLOAD_DIR, etc.
+
+# 4. Create and migrate the database (see "Database setup")
+node db/seed.js            # first install only; migrations also run on boot
+
+# 5. Start the application
+NODE_ENV=production npm start
+```
+
+`npm start` runs `node server.js`. It reads its configuration from the
+environment, listens on `$PORT` (falling back to 3000), serves the public site,
+the dashboard, and the API from that one process, and runs database migrations
+on boot.
+
+What `NODE_ENV=production` changes automatically:
+
+- Browser live-reload is disabled (no file watcher, no injected snippet; the
+  `/__dev/reload` route returns 404).
+- All traffic is redirected to HTTPS, and the session cookie is marked `Secure`.
+- The demo-login hint (`GET /api/dev-demo`) returns nothing.
+- Error responses never include stack traces.
+
+**Behind a reverse proxy / load balancer.** The app trusts `X-Forwarded-*`
+headers (`trust proxy` is on) so `req.secure` and the client IP are correct
+behind TLS termination. Terminate HTTPS at your proxy (nginx, Caddy, a cloud
+load balancer) and forward to the app's port.
+
+**Process management.** Run it under a process manager so it restarts on crash
+and on reboot — systemd, pm2, or your platform's own supervisor. Point the
+manager at `node server.js` with the working directory set to `server/`.
+
+**Persistent storage.** The SQLite database file and uploaded photos must live
+on persistent, backed-up storage. Set `DB_PATH` and `UPLOAD_DIR` to a mounted
+volume rather than the ephemeral container filesystem (see below).
+
+**Static-only note.** Because the marketing page itself is static, a static
+host (Netlify, Cloudflare Pages, GitHub Pages) *can* serve `index.html` — but it
+cannot run the API, the dashboard, sign-in, or payments, all of which need the
+Node process. Treat static hosting as marketing-only; the full product needs a
+Node host.
+
+**After pointing a real domain at it**, update these to the live URL:
+
+- `<link rel="canonical">` in `index.html`
+- `og:url` and `og:image` meta tags
+- `url` and `image` in the `LocalBusiness` JSON-LD block
+
+---
+
+## Environment variables
+
+Configuration comes entirely from the environment — no source file needs editing
+to configure infrastructure. Copy `server/.env.example` to `server/.env` and
+fill it in. Every variable has a safe default, so the app boots with an empty
+`.env` in development.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NODE_ENV` | `development` | `production` enables HTTPS redirect, Secure cookies, and disables live-reload and dev hints. |
+| `PORT` | `3000` | Port to listen on. Many hosts assign their own. |
+| `ALLOWED_ORIGINS` | *(empty)* | Comma-separated cross-origin API callers. Normally empty — the app serves its own frontend from the same origin. |
+| `DB_PATH` | `server/data/dash.db` | SQLite database file path. Point at a persistent volume in production. |
+| `STORAGE_DRIVER` | `local` | Photo storage driver. An `s3` seam exists in `lib/storage.js` for S3/R2 (not yet wired). |
+| `UPLOAD_DIR` | `server/data/uploads` | Where the local driver writes photos. Point at a persistent volume in production. |
+| `MAX_UPLOAD_BYTES` | `8388608` (8 MB) | Per-photo upload cap. |
+| `PAYMENT_PROVIDER` | `demo` | Active payment provider. `demo` is the only working value today. |
+| `DEV_RELOAD` | *(on)* | Set to `0` to disable browser live-reload in development. Ignored in production. |
+
+**Reserved (not read yet).** These are documented placeholders for planned work
+and are ignored today: `PAYMENT_PUBLIC_KEY`, `PAYMENT_SECRET_KEY`,
+`PAYMENT_WEBHOOK_SECRET` (for a future real payment provider), and `APP_URL`
+(for the planned first-run setup). Leave them blank while on the demo provider.
+
+The real `.env` is gitignored and must never be committed. Only
+`.env.example`, which contains placeholders, is tracked.
+
+---
+
+## Database setup
+
+The database is **SQLite**, built into Node 22+. There is no database server to
+install and no native module to compile — the data lives in a single file
+(`server/data/dash.db` by default, overridable with `DB_PATH`).
+
+```bash
+cd server
+node db/seed.js            # create the schema and seed a fresh install
+node db/seed.js --reset     # wipe and rebuild from scratch (backs up first)
+```
+
+Schema lives in `db/*.sql`; `db/index.js` is the only file that knows about the
+SQLite driver. Migrations also run automatically on every boot, so deploying a
+new version applies any schema changes without a manual step.
+
+**Moving to PostgreSQL later:** the schema is plain SQL and the driver is
+isolated in `db/index.js`, so a future port changes that one file. A
+`DATABASE_URL` variable is not used today (the app is SQLite-only).
+
+**22 tables.** Two design rules run throughout: one fact is stored in exactly
+one place, and nothing a service history points at is ever hard-deleted. The
+important one is `subscriptions.locked_price_cents` — a subscription stores the
+price it locked in at signup, so editing `plans.price_cents` later never
+re-prices an existing customer.
+
+---
+
+## Payment provider
+
+There is no real payment processor connected. `PAYMENT_PROVIDER=demo` is the
+default and only working value. It simulates a processor entirely inside the
+server: no card is collected, no network call is made, and nothing is ever
+charged. `server/lib/payments/index.js` is the seam a real provider plugs into
+later — nothing else in the app knows or cares which provider is active.
+
+`payments.charge()` accepts one of four simulated outcomes — `success`,
+`failed`, `declined`, `pending` — chosen by whoever is testing, so every branch
+of signup and billing can be exercised without a real card number.
+
+**Adding a real provider later** means implementing the payments seam and
+supplying `PAYMENT_PUBLIC_KEY` / `PAYMENT_SECRET_KEY` / `PAYMENT_WEBHOOK_SECRET`
+in the environment. The rest of the application does not change.
+
+---
+
+## First-run setup
+
+`node db/seed.js` produces the experience a brand-new business owner should see:
+
+- An **empty operational dashboard** — no customers, communities, routes,
+  employees, or revenue belonging to the owner.
+- A real **owner admin account** (`admin@dashtrashpickup.com`).
+- Exactly two self-contained **training accounts** (one customer, one employee)
+  so the customer and employee experiences can be demonstrated. Every row those
+  two accounts rely on is flagged `is_demo = 1`, so the owner's real dashboards
+  and reports exclude them entirely.
+
+Reference data that a business keeps — pricing plans and the launch coupon — is
+seeded as real, shared configuration, not another business's records.
+
+> A guided in-app first-run wizard (business name, admin account, logo, theme
+> from the browser) is designed but **not yet built**. Today the equivalent
+> configuration is done by seeding and by the System Settings screen in the
+> admin dashboard. See `docs/design/` for the design specs.
+
+---
+
+## Backups
+
+The entire application state is the SQLite database file plus the uploads
+directory. To back up:
+
+```bash
+# Database (safe to copy while running; SQLite is a single file)
+cp server/data/dash.db /path/to/backups/dash-$(date +%F).db
+
+# Uploaded photos
+cp -r server/data/uploads /path/to/backups/uploads-$(date +%F)
+```
+
+`db/seed.js --reset` automatically writes a timestamped backup of the existing
+database before rebuilding. Store backups off the server, and restore by copying
+the files back into place (or by pointing `DB_PATH` / `UPLOAD_DIR` at them).
+
+---
+
+## Security
+
+Security is enforced server-side; hiding a button in the UI is never the control.
+Highlights (each is detailed in the feature reference below):
+
+- **Authentication** — sessions are random tokens in `httpOnly` cookies; only
+  the SHA-256 of the token is stored, so a database dump yields no usable
+  sessions. Passwords use scrypt with a per-user salt. In production the cookie
+  is `Secure` and all traffic is redirected to HTTPS.
+- **Authorization** — a role gate plus an ownership check on every query, scoped
+  by the id from the session (never the URL or body). A wrong role gets **404**,
+  not 403.
+- **Baseline hardening** — security headers on every response, HTTPS redirect in
+  production, private paths (`/server`, `/node_modules`, `/.git`) blocked before
+  any file is served, and dotfiles never served. Stack traces are never returned
+  to clients.
+- **No secrets in the browser** — the demo provider collects no card data;
+  provider secrets, when a real provider is added, stay server-side only.
+- **Audit trail** — `audit_log` is append-only and records logins, pickups,
+  route reassignments, plan changes, cancellations, and admin edits.
+
+The suite in `server/test/` includes adversarial acceptance tests that verify
+these boundaries by attacking them. Run them with `npm test` in `server/`.
+
+---
+
+## Pricing configuration
 
 **All pricing, the introductory offer, and the pickup schedule live in one place:**
 the `CONFIG` object at the top of [`scripts.js`](scripts.js). Nothing is hardcoded
@@ -215,12 +371,51 @@ days: ["Tuesday", "Thursday"]; // "Tuesday and Thursday"
 days: ["Monday", "Wednesday", "Friday"]; // "Monday, Wednesday and Friday"
 ```
 
-The variance wording ("Pickup days may vary by community or service area")
-appears alongside the days everywhere, since schedules differ by property.
-
 ---
 
-## How the first-100 offer works
+## Feature reference
+
+### Project structure
+
+```
+.
+├── index.html          # public marketing page markup
+├── styles.css          # all styling, numbered sections
+├── scripts.js          # all public-page behavior, CONFIG at the top
+├── README.md
+├── .gitignore
+├── .env.example        # (in server/) copy to .env and fill in
+├── dashboard/          # role-based operations dashboard (admin/employee/customer)
+├── docs/design/        # architecture and design specs
+├── images/             # hero, service photos, logo, favicon, OG image
+└── server/             # Node + Express application server
+    ├── server.js       #   API routes, static serving, security middleware
+    ├── db/             #   SQLite schema, migrations, seed
+    ├── lib/            #   payments, auth, storage, finance, coupons, ...
+    ├── routes/         #   API route modules
+    ├── test/           #   unit + adversarial acceptance tests
+    ├── .env.example
+    └── package.json
+```
+
+Both `styles.css` and `scripts.js` open with a table of contents listing their
+numbered sections.
+
+### What's in it
+
+| Feature                   | Notes                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| Responsive marketing page | Hero, how-it-works, audience cards, FAQ, contact                                  |
+| Promotional coupon modal  | Limited introductory offer, dismissible, remembered for 7 days                    |
+| Three pricing plans       | Monthly, quarterly, annual — all calculated from one config value                 |
+| Six-step signup flow      | Plan → Info → Address → Availability → Payment → Confirmation                     |
+| Service-area check        | Validates the customer's ZIP against a service list                               |
+| SEO + social metadata     | Open Graph tags, canonical URL, `LocalBusiness` JSON-LD                           |
+| Accessibility             | Keyboard-navigable modal with focus trapping, ARIA states, reduced-motion support |
+| Operations dashboard      | Admin, employee, and customer roles behind authentication                         |
+| Financials + payroll      | Revenue, labor, expenses, profit — all derived from transactions                  |
+
+### How the first-100 offer works
 
 The introductory rate goes to the first 100 customers who **complete signup and
 payment** — not the first 100 who click the offer.
@@ -245,38 +440,16 @@ coupon and the pricing section, read live from `GET /api/intro-spots`. When it
 reaches zero, the offer block and the introductory plan option hide themselves
 automatically.
 
-### Why the popup stops appearing
-
-Once a visitor dismisses the coupon, it stays hidden for `intro.remindAfterDays`
-(7 by default) — a flag in that browser's `localStorage`. That is deliberate:
-a promo that reappears on every page load is the thing people close without
-reading.
-
-While building or demoing, force it back:
-
-| URL | Effect |
-|---|---|
-| `http://localhost:3000/?offer=1` | Show the offer even if dismissed |
-| `http://localhost:3000/?offer=0` | Suppress it |
-
-Or clear the flag from the browser console:
+**Why the popup stops appearing.** Once a visitor dismisses the coupon, it stays
+hidden for `intro.remindAfterDays` (7 by default) — a flag in that browser's
+`localStorage`. While building or demoing, force it back with `?offer=1` in the
+URL (`?offer=0` suppresses it), or clear the flag:
 
 ```js
 localStorage.removeItem('dtp_promo_dismissed'); location.reload();
 ```
 
-An incognito window works too — `localStorage` is per browser profile, which is
-also why it can appear on one machine and not another.
-
----
-
-## Payments (demo provider)
-
-There is no real payment processor connected. `PAYMENT_PROVIDER=demo` is the
-default and only working value — it simulates a processor entirely inside the
-server: no card is collected, no network call is made, and nothing is ever
-charged. `server/lib/payments/index.js` is the seam a real provider would plug
-into later; nothing else in the app knows or cares which provider is active.
+### Payments (demo provider)
 
 ```
 Browser                          Your server                    Demo provider
@@ -289,28 +462,7 @@ pick an outcome  ──────────────→ POST /api/checkou
   ←── confirmation ────────────
 ```
 
-`payments.charge()` accepts one of four simulated outcomes —
-`success`, `failed`, `declined`, `pending` — chosen by whoever is testing, so
-you can exercise every branch of the signup and billing flow without ever
-touching a real card number.
-
-### Configure and run
-
-```bash
-cd server
-cp .env.example .env     # PAYMENT_PROVIDER=demo is already set
-npm install
-node db/seed.js          # demo data; add --reset to rebuild
-npm start
-```
-
-The server serves the public site too, so there is no second process:
-open <http://localhost:3000>.
-
-> This app uses port 3000. Avoid 5000 on macOS — AirPlay Receiver holds it and
-> returns a confusing `403`.
-
-### API reference
+#### API reference
 
 | Endpoint | Purpose |
 |---|---|
@@ -320,16 +472,16 @@ open <http://localhost:3000>.
 | `GET /api/service-area?zip=` | `{ available }` |
 | `POST /api/checkout` | Customer → payment method → subscription |
 
-### How the 100 spots stay honest
+#### How the 100 spots stay honest
 
 Every signup writes its records to the database **before** the provider is
-called (`lib/signup.js`), and the promotional redemption that actually counts
-against the 100-spot cap is recorded only **after** the charge comes back
-`paid`, inside the same transaction that marks the payment paid. That check
-and that write happen atomically, so two simultaneous checkouts cannot both
-claim the last spot, and a declined or failed charge never burns one.
+called (`lib/signup.js`), and the promotional redemption that counts against the
+100-spot cap is recorded only **after** the charge comes back `paid`, inside the
+same transaction that marks the payment paid. That check and that write happen
+atomically, so two simultaneous checkouts cannot both claim the last spot, and a
+declined or failed charge never burns one.
 
-## Dashboard (admin / employee / customer)
+### Dashboard (admin / employee / customer)
 
 A role-based operations dashboard lives behind authentication at `/dashboard/`.
 
@@ -339,28 +491,19 @@ A role-based operations dashboard lives behind authentication at `/dashboard/`.
 | **Employee** | Only routes assigned to them, their stops, photo submission | Any billing or payment information |
 | **Customer** | Only their own account, plan, payments, schedule, history | Other customers, employees, routes |
 
-### Signing in
+**Demo sign-in** (after seeding). Open `/dashboard/login.html`:
 
-```bash
-cd server
-npm install
-node db/seed.js        # demo data; add --reset to rebuild
-npm start
-```
-
-Open <http://localhost:3000/dashboard/login.html>. Demo password `DashDemo2026`:
-
-| Account | Role |
-|---|---|
-| `admin@dashtrashpickup.com` | Admin |
-| `marcus@dashtrashpickup.com` | Employee |
-| `olivia.bell6@example.com` | Customer |
+| Account | Role | Password |
+|---|---|---|
+| `admin@dashtrashpickup.com` | Admin (owner) | `DashDemo2026` |
+| `employee@dashtrashpickup.com` | Employee (training) | `employee` |
+| `customer@email.com` | Customer (training) | `customer` |
 
 > Routes only run Tuesday and Thursday, so the employee dashboard is
 > legitimately empty on other days. Append `?date=2026-09-15` to
 > `/dashboard/employee/` to inspect any service day.
 
-### How access control works
+#### How access control works
 
 Two layers, because either alone is insufficient:
 
@@ -375,7 +518,7 @@ Sessions are random tokens in `httpOnly` cookies; only the SHA-256 of the token
 is stored, so a database dump yields no usable sessions. Passwords use scrypt
 with a per-user salt.
 
-### Verified by attacking it
+#### Verified by attacking it
 
 | Attempt | Result |
 |---|---|
@@ -389,36 +532,20 @@ with a per-user salt.
 | Non-intro customer forces `planCode: Introductory` | 403 |
 | Raising `plans.price_cents` | locked intro price unchanged |
 
-### Photos
+#### Photos
 
 Employee photos are written outside the web root and streamed back only through
 `/api/photos/:id`, which authorizes every single request. A leaked photo URL is
-useless without permission. The database stores only the storage key.
+useless without permission. `lib/storage.js` is an adapter: local disk today,
+with an `s3` branch to fill in for S3, R2, or any S3-compatible bucket.
 
-`lib/storage.js` is an adapter: local disk today, with an `s3` branch to fill in
-for S3, R2, or any S3-compatible bucket. Upload code does not change.
-
-### Database
-
-22 tables in SQLite (`server/data/dash.db`), created from `db/schema.sql`.
-Design rules: one fact in one place, and nothing a service history points at is
-ever hard-deleted.
-
-The important one: **`subscriptions.locked_price_cents`**. A subscription stores
-the price it locked in at signup, so editing `plans.price_cents` later never
-re-prices an existing customer. That is what protects the introductory rate.
-
-`node:sqlite` is built into Node 22+, so there is no native module to compile.
-To move to PostgreSQL later, the schema is plain SQL and `db/index.js` is the
-only file that knows about the driver.
-
-### Audit trail
+#### Audit trail
 
 `audit_log` is append-only and records logins, pickups, route reassignments,
 plan changes, cancellations, and admin edits — actor, role, entity, IP, and
 timestamp. Visible on the admin dashboard.
 
-### What is scaffolded but not built
+#### What is scaffolded but not built
 
 Honest list — the API exists, the UI does not:
 
@@ -429,14 +556,10 @@ Honest list — the API exists, the UI does not:
 - **Reports** — only the open-issues table
 - **Property manager accounts, QR codes, notifications, route optimization** — schema accommodates them; not implemented
 
----
-
-## Financials, payroll and profitability
+### Financials, payroll and profitability
 
 The admin dashboard answers the question the business actually needs: **is this
 making money?**
-
-### What it computes
 
 ```
 REVENUE  −  LABOR  −  OPERATING EXPENSES  =  PROFIT
@@ -445,115 +568,59 @@ REVENUE  −  LABOR  −  OPERATING EXPENSES  =  PROFIT
 Every figure is **derived from transactions** — payments, time entries, expenses.
 No total is ever stored, so a number cannot drift from the rows that produced it.
 Revenue counts only `status = 'paid'`; failed, pending, and refunded charges are
-excluded by design.
+excluded by design. Reported at four levels: **company**, **route**,
+**community**, and **per customer**.
 
-Reported at four levels: **company**, **route**, **community**, and
-**per customer** (average revenue / cost / profit).
-
-### Time clock
-
-Employees clock in and out from their phone. The system records employee, date,
-times, break, payable minutes, optional GPS, and device. A **rate snapshot is
+**Time clock.** Employees clock in and out from their phone. A **rate snapshot is
 taken at clock-in**, so changing someone's pay rate later never rewrites the cost
-of shifts already worked.
+of shifts already worked. A unique index enforces one open shift per employee — a
+second clock-in is refused with 409. Admins can correct a timesheet, but a
+**reason is required** and the before/after is written to the audit trail.
 
-A unique index enforces one open shift per employee — a second clock-in is
-refused with 409.
-
-Admins can correct a timesheet, but a **reason is required** and the before/after
-is written to the audit trail.
-
-### Compensation
-
-Per-employee and historical, never hard-coded:
-
-| Pay type | Rate | Payroll |
-|---|---|---|
-| `hourly` | $18.00/hr | hours × rate |
-| `daily` | $90.00/shift | shifts × rate |
-
-Setting a new rate ends the previous one the day before, so the rate in force on
-any date is unambiguous.
-
-### Break-even and pricing
+**Compensation** is per-employee and historical, never hard-coded (`hourly` at
+hours × rate, or `daily` at shifts × rate). Setting a new rate ends the previous
+one the day before, so the rate in force on any date is unambiguous.
 
 **Break-even** reports, per route, how many customers are needed to cover current
-expenses. It treats current expenses as fixed and current revenue-per-customer as
-each new customer's contribution — a floor, not a promise, since a real extra
-customer adds some cost too.
+expenses. **The pricing simulator** shows what margin each candidate monthly
+price *would have* produced over the period, holding cost structure and customer
+count constant — it changes nothing for anyone.
 
-**The pricing simulator** shows what margin each candidate monthly price *would
-have* produced over the period, holding cost structure and customer count
-constant. It answers "what if we had charged X", not "what happens if we change
-to X" — customers may leave at a higher price. It changes nothing for anyone.
+**Loss alerts** have four states, each shown with an icon and a label so status
+is never carried by color alone: **PROFITABLE** · **LOW MARGIN** · **BREAK EVEN**
+· **LOSING MONEY**.
 
-### Loss alerts
+**Charts** are inline SVG, no charting library. The palette was run through a
+colorblind-safety validator; every chart ships **direct labels and a "View as
+table" toggle**, so identity never depends on color. One y-axis only.
 
-Four states, each shown with an icon and a label so status is never carried by
-color alone: **PROFITABLE** · **LOW MARGIN** · **BREAK EVEN** · **LOSING MONEY**.
-Alerts fire for company-level losses, unprofitable routes and communities, labor
-above 50% of revenue, and customers priced below cost to serve.
+**Expenses** span seventeen categories, each optionally attributed to a route or
+community. Anything unattributed is overhead, allocated by revenue share — and
+**the allocation method is stated in the code** because every allocation is a
+judgement call.
 
-### Charts
-
-Inline SVG, no charting library. The palette was run through a colorblind-safety
-validator rather than eyeballed:
-
-| Check | Result |
-|---|---|
-| Lightness band | PASS |
-| Chroma floor | PASS |
-| CVD separation (protan/deutan) | PASS — worst ΔE 10.1 |
-| Normal-vision separation | PASS — worst ΔE 24.0 |
-| Contrast vs surface | WARN on aqua (2.82) |
-
-The contrast warning is why every chart ships **direct labels and a "View as
-table" toggle** — identity never depends on color. One y-axis only; never two
-scales on one chart.
-
-### Expenses
-
-Seventeen categories, with each expense optionally attributed to a route or a
-community. Anything unattributed is overhead and gets allocated by revenue share
-in the profitability math — **the allocation method is stated in the code**
-because every allocation is a judgement call.
-
-### Portal access
-
-The public site has a **Portal** menu with Customer / Employee / Admin sign-in.
-All three use the same authentication; **the server decides the destination from
-the role**, so the menu is convenience, not security. An employee who types
-`/dashboard/admin/` is redirected to their own dashboard, and every
-`/api/finance/*` endpoint returns 404 for non-admins.
+**Portal access.** The public site has a Portal menu with Customer / Employee /
+Admin sign-in. All three use the same authentication; **the server decides the
+destination from the role**, so the menu is convenience, not security.
 
 | Endpoint | admin | employee | customer | signed out |
 |---|---|---|---|---|
 | `/api/finance/*` (9 routes) | 200 | **404** | **404** | 401 |
 | `/api/employee/shift` | — | 200 | 404 | 401 |
 
-## Employee management and accounts
+### Employee management and accounts
 
 The **Employees** tab lists staff with search and status filters; opening one
-gives a full profile page: Profile · Pay (with rate history) · Time · Routes ·
+gives a full profile: Profile · Pay (with rate history) · Time · Routes ·
 Service · Account · Notes. **Edit employee** changes any of it in place — no
-delete-and-recreate.
+delete-and-recreate. The **Accounts** tab is the central view of every user.
 
-The **Accounts** tab is the central view of every user (admin, employee,
-customer) with role, status, and locked filters.
+**Employment status:** `active` · `inactive` · `on_leave` · `terminated` ·
+`archived`. Leaving `active` also deactivates the login and destroys live
+sessions. **Nobody is ever deleted** — the row stays so time entries, pickup
+records, and payroll history remain accurate.
 
-### Employment status
-
-`active` · `inactive` · `on_leave` · `terminated` · `archived`
-
-Leaving `active` also deactivates the login and destroys live sessions — a
-terminated employee cannot keep working from an open tab. **Nobody is ever
-deleted**: the row stays so time entries, pickup records, and payroll history
-remain accurate. Verified: a terminated employee is refused at login while their
-pay history and shifts stay intact.
-
-### Passwords
-
-An admin can never see an existing password — only replace it.
+**Passwords.** An admin can never see an existing password — only replace it.
 
 | Action | Effect |
 |---|---|
@@ -564,40 +631,19 @@ An admin can never see an existing password — only replace it.
 
 A temporary password is genuinely inert: login succeeds but returns
 `mustChangePassword`, every API route answers **403 PASSWORD_CHANGE_REQUIRED**,
-and the dashboard **302-redirects** to the change page. Only after choosing a new
-password does anything else work.
+and the dashboard **302-redirects** to the change page. Every password action is
+written to `password_reset_events` — never the password itself.
 
-Every password action is written to `password_reset_events` — the fact of a
-reset, its actor, and its time, never the password itself.
-
-### Pay rate history
-
-Changing a rate never rewrites past payroll. Setting a new rate ends the previous
-one the day before:
+**Pay rate history.** Changing a rate never rewrites past payroll:
 
 ```
 $18.00 hourly   2026-06-14 → 2026-09-11
 $20.00 hourly   2026-09-12 → present
 ```
 
-Verified by raising Marcus from $18 to $20: his September payroll still computed
-at **$17.98/hr effective** because each time entry carries the rate snapshot
-taken at clock-in. New shifts use $20.
-
-### Audit trail
-
-Consequential changes record **old → new**, not just that something happened:
-
-```
-account.role_changed   Jey   role: employee -> admin
-employee.updated       Jey   status: active -> terminated
-timeclock.corrected    Jey   before/after clock times + reason
-```
-
-Role changes require typing `CHANGE ROLE` to confirm, and an admin cannot change
-their own role or lock their own account.
-
-### Security
+**Audit trail** records **old → new**, not just that something happened. Role
+changes require typing `CHANGE ROLE` to confirm, and an admin cannot change their
+own role or lock their own account.
 
 | Endpoint | admin | employee | customer | signed out |
 |---|---|---|---|---|
@@ -605,10 +651,7 @@ their own role or lock their own account.
 | Issue temp password | 200 | **404** | **404** | 401 |
 | Promote self to admin | — | **404** | **404** | 401 |
 
-The employee detail response was checked for credential leakage: **no
-`password_hash` appears anywhere in it.**
-
-## Coupons and service credits
+### Coupons and service credits
 
 Two different things, kept apart in the schema, the routes, and the reports:
 
@@ -619,31 +662,16 @@ Two different things, kept apart in the schema, the routes, and the reports:
 | Reported as | Marketing discount | Operational cost |
 | Table | `coupons`, `coupon_redemptions` | `service_credits` |
 
-### Coupons
+**Coupons.** Types: **fixed** dollar off · **percent** off · **promo_price** · 
+**free_period**. Each has a window, a redemption cap, a per-customer limit, plan
+eligibility, and new-vs-existing targeting. Status is **derived, never stored**,
+so it cannot go stale. **Checking a code reserves nothing** — a redemption row is
+written only after payment succeeds. The first-100 launch offer is a real coupon
+(`DASHLAUNCH`); the public site reads `/api/intro-spots` from it.
 
-Types: **fixed** dollar off · **percent** off · **promo_price** (a set price) ·
-**free_period**. Each has a window, a redemption cap, a per-customer limit
-(once / multiple / once per cycle), plan eligibility, and new-vs-existing
-targeting. Stacking is off unless **both** coupons allow it.
-
-Status is **derived, never stored**, so it cannot go stale:
-`scheduled` · `active` · `expired` · `limit_reached` · `disabled`.
-
-**Checking a code reserves nothing.** A redemption row is written only after
-payment succeeds. Verified: five validations of `DASHLAUNCH` left the count at
-9/100. Under 20 simultaneous redemptions against 3 remaining spots, **exactly 3
-were granted** — the cap is re-checked inside the transaction.
-
-New vs existing is decided at redemption time and frozen, because a customer who
-is new today would otherwise look existing when the report runs next year.
-
-The first-100 launch offer is now a real coupon (`DASHLAUNCH`). The public site
-reads `/api/intro-spots` from it — **the hardcoded frontend counter is gone.**
-
-### Service credits — the $5 rule
-
-An employee may issue up to the configured limit on their own. Above it, the
-credit becomes a request that does nothing until a manager approves it.
+**Service credits — the $5 rule.** An employee may issue up to the configured
+limit on their own; above it, the credit becomes a request that does nothing
+until a manager approves it.
 
 | Amount | Result |
 |---|---|
@@ -652,132 +680,60 @@ credit becomes a request that does nothing until a manager approves it.
 | **$500 from a tampered client** | **still only `pending`** |
 
 The threshold is checked on the server, so editing the request body changes
-nothing. Monthly caps also apply — per employee and per customer — so repeated
-$5 credits cannot add up unchecked. Reason `other` requires notes.
+nothing. Monthly caps also apply — per employee and per customer.
 
-A manager can **approve**, **modify** (never above the requested amount), or
-**reject**. Deciding twice is refused. Every decision records requested vs
-approved amount, both parties, and the reason.
-
-### Manager role
-
-Permissions are **configurable rows**, not code, so a Manager never silently
-inherits Admin:
+**Manager role.** Permissions are **configurable rows**, not code, so a Manager
+never silently inherits Admin:
 
 | | Manager | Admin |
 |---|---|---|
 | Credit approvals, coupons, reports, routes, customers | ✅ | ✅ |
 | **Financials, payroll, account administration** | ❌ | ✅ |
 
-Verified: manager gets 200 on operations endpoints and **404** on
-`/api/finance/*` and `/api/people/accounts`.
-
-### Financial separation
-
-```
-gross revenue      $3,146.40
-coupon discounts  -$  240.40
-service credits   -$   68.00
-refunds           -$    0.00
-net collected      $2,838.00     discount rate 9.8% of gross
-```
-
-Coupon discounts are already absent from collected revenue (the customer was
-charged the discounted price), so they are **not** subtracted again in profit —
-that would double-count. Service credits **are** subtracted, because they are
+**Financial separation.** Coupon discounts are already absent from collected
+revenue (the customer was charged the discounted price), so they are **not**
+subtracted again in profit. Service credits **are** subtracted, because they are
 money handed back after the fact.
 
-### What the customer sees
-
-Credits appear on their billing page as a line item with a balance. They never
-see internal notes, who requested it, or any approval discussion.
-
-## Community lifecycle and service verification
-
-### A property exists before we service it
+### Community lifecycle and service verification
 
 ```
 lead → waiting_list / driver_needed → pending_setup → scheduled → active
 ```
 
 **Creating a community never starts service.** Activation is a separate,
-deliberate endpoint that first checks four things:
+deliberate endpoint that first checks four things: pickup days configured, on at
+least one route, a driver assigned, and units exist. A plain
+`PATCH {status:'active'}` is **refused** and redirected to the activate endpoint;
+activation with failing checks returns **409** listing exactly what is missing
+(`force: true` overrides deliberately).
 
-| Check | |
-|---|---|
-| Pickup days configured | schedule rows exist |
-| On at least one route | a route stop references it |
-| A driver is assigned | that route has a current assignment |
-| Units exist | there is something to service |
+**Waiting list.** `/api/waitlist` is public. Joining creates **no customer, no
+subscription, and no charge**. Duplicates are refused, and signing up for an
+already-active community redirects to normal signup.
 
-Verified: a plain `PATCH {status:'active'}` is **refused** and redirected to the
-activate endpoint; activation with failing checks returns **409** listing exactly
-what is missing (`force: true` overrides deliberately). On activation the actual
-start date is recorded, status history is written, and everyone on the waiting
-list is marked notified.
+**Photo verification.** A completed pickup requires evidence — completing without
+a photo returns **400 `PHOTO_REQUIRED`**. Both photo requirements are settings,
+not constants (`pickup.require_photo`, `pickup.require_issue_photo`).
 
-A **tentative start date** is exactly that — it is labelled tentative and
-activates nothing.
+**Every address individually.** The checklist is grouped by building with
+per-building progress and an overall count. There is no way to mark a whole
+community done — each unit carries its own status, timestamp, employee, photo,
+and notes.
 
-### Waiting list
+**Issue reporting — 13 types:** No trash outside · Unable to access property ·
+Trash improperly bagged · Oversized item · Restricted item · Customer not home ·
+Incorrect address · Blocked access · Animal / safety issue · Property issue ·
+Service problem · Customer not found · Other.
 
-`/api/waitlist` is public. Joining creates **no customer, no subscription, and
-no charge** — verified: the launch coupon stayed at 9/100 after a waiting-list
-signup. Duplicates are refused, and signing up for an already-active community
-redirects to normal signup.
-
-Promotional handling on the waiting list is **configurable**, not assumed:
-
-| `promo.reserve_on_waitlist` | Behaviour |
-|---|---|
-| `0` (default) | The rate applies when service begins, subject to availability |
-| `1` | A promotional spot is held at signup |
-
-Both were tested by flipping the setting.
-
-### Photo verification
-
-A completed pickup is a claim that work was done, so it requires evidence.
-Verified: completing without a photo returns **400 `PHOTO_REQUIRED`**.
-
-Both requirements are settings, not constants:
-
-| Setting | Default |
-|---|---|
-| `pickup.require_photo` | `1` — required to complete |
-| `pickup.require_issue_photo` | `0` — optional on an issue report |
-
-### Every address individually
-
-The checklist is grouped by **building** with per-building progress
-(`Building 1 — 4/4`, `Building 2 — 0/4`) and an overall count. There is no way to
-mark a whole community done — each unit carries its own status, timestamp,
-employee, photo, and notes.
-
-### Issue reporting — 13 types
-
-No trash outside · Unable to access property · Trash improperly bagged ·
-Oversized item · Restricted item · Customer not home · Incorrect address ·
-Blocked access · Animal / safety issue · Property issue · Service problem ·
-Customer not found · Other.
-
-### Notes
-
-Employee notes are **internal by default**. A note reaches the customer only when
-explicitly flagged, which writes a separate customer-visible note.
-
-### Service credits from the pickup screen
-
-$0–$5 quick-tap chips plus a free amount field, with the reason list and the $5
-authority rule described under Coupons and service credits. A credit raised here
-is linked to the customer, employee, community, and route.
-
-## Admin control: archiving, route versioning, custom roles
+### Admin control: archiving, route versioning, custom roles
 
 The governing rule: **current and future information is editable; history keeps
 the values that were true when the work happened.**
 
-### Nothing operational is deleted
+**Nothing operational is deleted.** Communities, routes, employees, customers,
+pickup records, photos, payments, credits, time entries, and audit logs are never
+hard-deleted.
 
 | State | Meaning |
 |---|---|
@@ -786,77 +742,21 @@ the values that were true when the work happened.**
 | Archived | Retained for history, hidden from active views |
 | Deleted | Only for a record that was never used |
 
-Communities, routes, employees, customers, pickup records, photos, payments,
-credits, time entries, and audit logs are never hard-deleted.
+**Locked structural fields.** Once a property has operational history, renaming
+it is refused (**409**) — older records would start describing a property that no
+longer exists by that name. Operational fields stay editable.
 
-Archiving a community stops future scheduling and keeps everything else —
-verified: 12 units and 9 customer links survived, and `active` schedules were
-closed with an end date rather than removed.
+**Route versioning.** Routes carry a configuration versioned by effective date.
+Changing a route today closes the old version and opens a new one; it never
+rewrites the old one, so historical pickup records keep pointing at the driver
+and times that were true on the day.
 
-### Locked structural fields
+**Custom roles.** **62 granular permissions across 12 categories**, edited as
+checkboxes. Admin always holds everything and cannot be modified. **Enforcement
+is server-side** — hiding a button is presentation; the API refuses the request
+regardless of what the page shows.
 
-Once a property has operational history, renaming it is refused (**409**) —
-older records would start describing a property that no longer exists by that
-name. Operational fields (manager contact, start time, access instructions,
-service instructions, pricing notes, status) stay editable.
-
-### Route versioning — the history test
-
-Routes carry a configuration versioned by effective date. Changing a route today
-closes the old version and opens a new one; it never rewrites the old one.
-
-**Tested by doing it.** Route 1 had 5 pickups on Sept 15 driven by Marcus. I then
-reassigned the driver to James and changed the start time, effective Oct 1:
-
-```
-route_assignments
-  Marcus: 2026-08-13 → 2026-09-30
-  James:  2026-10-01 → present
-
-pickup_records for route 1 (after the change)
-  2026-09-15  Marcus   ← unchanged
-```
-
-September still says Marcus. The version history shows both configurations with
-who changed what, when, and why.
-
-The same pattern already protects pay rates (rate snapshot at clock-in), plan
-prices (locked price on the subscription), and service schedules (effective-dated
-`pickup_schedules`).
-
-### Custom roles
-
-**62 granular permissions across 12 categories**, edited as checkboxes. Admin
-always holds everything and cannot be modified. Built-in roles cannot be archived.
-
-Creating "Route Supervisor" with 11 boxes ticked produced exactly this:
-
-| Request | Result |
-|---|---|
-| `GET /api/roles/routes/all` | 200 |
-| `PATCH /api/roles/routes/1` | 200 |
-| `GET /api/people/employees` | 200 |
-| `GET /api/finance/summary` | **404** |
-| `GET /api/finance/payroll` | **404** |
-| `POST .../compensation` (change pay) | **404** |
-| `POST /api/roles` (create a role) | **404** |
-| `POST .../routes/2/archive` | **404** |
-
-**Enforcement is server-side.** Hiding a button is presentation; the API refuses
-the request regardless of what the page shows. `GET /api/roles/me/permissions`
-returns what the UI should render, derived from the same source the guard uses.
-
-`user_roles` exists so a user can hold several roles later; changing the primary
-role keeps it in step, so an old role's permissions do not silently survive.
-
-### Route management
-
-Create · Edit · Duplicate · Archive · Restore, with status
-`draft · scheduled · active · on_hold · inactive · archived`, start and estimated
-end times, service area, primary driver, additional crew, stop ordering, and
-effective dates on every change.
-
-## Cancel, Delete, and Archive
+### Cancel, Delete, and Archive
 
 Three distinct actions, and the system decides which is even offered:
 
@@ -866,70 +766,19 @@ Three distinct actions, and the system decides which is even offered:
 | **Delete** | Permanently remove a record that was *never used* |
 | **Archive** | Retire an established record, keeping all its history |
 
-### Cancel restores, it does not merely close
+**Cancel restores, it does not merely close.** `guardForm()` snapshots every
+field when a form opens; Cancel puts each field back and clears the dirty flag.
 
-`guardForm()` snapshots every field when a form opens. Cancel puts each field
-back and clears the dirty flag, so reopening never shows abandoned edits.
+**Unsaved-changes warning.** Editing without saving and then leaving prompts
+*"You have unsaved changes. Leave without saving?"* — on tab switches inside the
+dashboard and on closing the browser tab.
 
-Verified on a real route: start time `17:30` → edited to `16:00` → Cancel →
-back to `17:30`, and the database still read `17:30` — **nothing was saved.**
-
-### Unsaved-changes warning
-
-Editing without saving and then leaving prompts *"You have unsaved changes. Leave
-without saving?"* — on tab switches inside the dashboard and on closing the
-browser tab. Verified both ways: declining keeps you on the form, accepting
-navigates.
-
-### Delete is decided by the server, not the page
-
-`lib/deletable.js` inspects every relationship that would constitute history.
-The UI calls `GET .../deletable` to decide whether to render a Delete button —
-and the `DELETE` route runs the same check again, so a hand-crafted request
-cannot destroy history either.
-
-Tested on live data:
-
-| Record | Result |
-|---|---|
-| North Columbus Route | **refused** — 5 pickup records, 18 stops, 11 time entries, 2 assignments, 3 expenses |
-| Marcus (employee) | **refused** — 5 pickups, 23 time entries, 8 credits, 2 pay rates |
-| `DASHLAUNCH` coupon | **refused** — 9 redemptions, 2 waiting-list holds |
-| "Test Route 2" (draft) | **deleted** |
-| Duplicate community, no customers | **deleted** |
-| Employee who never worked | **deleted** |
-| Coupon never redeemed | **deleted** |
-
-A refusal names exactly what blocks it and suggests archiving instead.
-
-Built-in roles can never be deleted, and an admin cannot delete their own
-account. The **audit entry outlives the record**, so even a permitted deletion
-stays traceable.
-
-### Button layout
-
-Destructive actions are visually separated — Save and Cancel sit on the left of
-the action bar, Archive on the right, and permanent Delete in its own red
-"danger zone" panel below, which only appears when deletion is actually allowed.
-
-## Deploying
-
-The site is static, so any host works. Since it's already on GitHub, the simplest
-option is **GitHub Pages**:
-
-1. Repository → **Settings** → **Pages**
-2. Under _Source_, choose branch `main` and folder `/ (root)`
-3. Save — the site publishes at
-   `https://jeylofton.github.io/Dash-Trash-Pickup-Service/`
-
-Netlify and Cloudflare Pages also work by pointing them at the repo with no build
-command.
-
-After deploying to a real domain, update these to the live URL:
-
-- `<link rel="canonical">` in `index.html`
-- `og:url` and `og:image` meta tags
-- `url` and `image` in the `LocalBusiness` JSON-LD block
+**Delete is decided by the server, not the page.** `lib/deletable.js` inspects
+every relationship that would constitute history. The UI calls
+`GET .../deletable` to decide whether to render a Delete button — and the
+`DELETE` route runs the same check again, so a hand-crafted request cannot
+destroy history either. A refusal names exactly what blocks it and suggests
+archiving instead. The **audit entry outlives the record**.
 
 ---
 
@@ -943,7 +792,7 @@ Placeholder values that need replacing:
 - [ ] **Final pricing** — confirm the monthly rate and both discounts
 - [ ] **Introductory rate** — decide between $15 and $18
 - [ ] **Service ZIP list** — replace the demo list with real coverage
-- [ ] **A real payment provider** — the site currently runs on a demo provider
+- [ ] **A real payment provider** — the app currently runs on a demo provider
       that moves no money; connect a real processor before accepting customers
 - [ ] **Accepted waste types** — publish restrictions (hazardous materials,
       oversized items, loose liquids, construction debris, unbagged waste)
@@ -955,9 +804,8 @@ Placeholder values that need replacing:
 
 ## Tech notes
 
-Vanilla HTML, CSS, and JavaScript. No frameworks, no build step, no npm.
-
-A few decisions worth knowing about if you come back to this later:
+The public page is vanilla HTML, CSS, and JavaScript — no frameworks, no build
+step. A few decisions worth knowing about:
 
 - **`[hidden] { display: none !important; }`** in `styles.css` is load-bearing.
   The browser's built-in rule for the `hidden` attribute is easily overridden by
@@ -965,13 +813,27 @@ A few decisions worth knowing about if you come back to this later:
   on anything styled as flex or grid — including the modal overlay.
 - **`scroll-margin-top: 92px`** on the anchor targets keeps section headings from
   landing underneath the sticky header.
-- **`scripts.js` is a classic script, not a module.** Modules are blocked by CORS
-  over `file://`, so keeping it classic is what lets you double-click
-  `index.html` and have the page work.
+- **`scripts.js` is a classic script, not a module**, so the public page also
+  works when opened directly from disk.
 - **Images carry `width`/`height`** so the browser reserves space and the layout
   doesn't jump while they load.
-- **Every color is a CSS custom property** in `:root` — the orange, charcoal,
-  white, and gray palette is defined once at the top of `styles.css`.
+- **Every color is a CSS custom property** in `:root`, defined once at the top of
+  `styles.css`.
+
+---
+
+## Development tools (optional)
+
+These are conveniences for whoever works on the code. **None of them is required
+to install, run, or deploy the application** — it runs on Node and npm alone, and
+is not tied to any editor or assistant.
+
+- Any editor or IDE works. Editor- and assistant-specific config directories
+  (`.vscode/`, `.idea/`, `.claude/`, `.superpowers/`) are gitignored and are not
+  part of the product.
+- `npm run dev` (in `server/`) gives auto-restart and browser live-reload while
+  developing; `npm test` runs the unit and adversarial acceptance suite.
+- Design and architecture specs are kept in `docs/design/`.
 
 ---
 

@@ -1,23 +1,46 @@
-# macOS metadata (this project lives on an exFAT drive)
-.DS_Store
-._*
-.Spotlight-V100
-.Trashes
-
-# Secrets - NEVER commit these
-server/.env
+# ---------------------------------------------------------------
+# Secrets - NEVER commit these. The template .env.example is kept.
+# ---------------------------------------------------------------
 .env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
 
+# ---------------------------------------------------------------
 # Dependencies
+# ---------------------------------------------------------------
 node_modules/
 
-# Local signup data
-server/data/
-
-# Database and uploaded photos
+# ---------------------------------------------------------------
+# Runtime data: local database, backups, and uploaded photos.
+# These are generated at runtime and are environment-specific.
+# ---------------------------------------------------------------
 server/data/
 *.db
 *.db-wal
 *.db-shm
-server/.env.production
-.env.production
+
+# ---------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------
+logs/
+*.log
+
+# ---------------------------------------------------------------
+# Development tooling (editors, AI assistants). Not part of the
+# product - the application runs without any of these.
+# ---------------------------------------------------------------
+.vscode/
+.idea/
+.claude/
+.superpowers/
+
+# ---------------------------------------------------------------
+# macOS metadata (this project has lived on an exFAT drive)
+# ---------------------------------------------------------------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes

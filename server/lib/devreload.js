@@ -1,9 +1,9 @@
 /* ============================================================
-   Live reload for development — replaces VS Code Live Server.
+   Live reload for development.
 
-   Why this exists: Live Server only handles GET, so it cannot run
-   this app (sign-in is a POST). This gives the same save-and-refresh
-   workflow from the real server, which also serves the API.
+   Gives a save-and-refresh workflow straight from the application
+   server (the one process that serves both the site and the API),
+   so no separate static-file server is needed while developing.
 
    Off automatically when NODE_ENV=production.
    ============================================================ */

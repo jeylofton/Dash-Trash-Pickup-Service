@@ -1,10 +1,9 @@
 /* Shared dashboard helpers. */
 
 const WRONG_SERVER =
-  'This page is being served by a static file server (VS Code Live Server, ' +
-  'python -m http.server, or similar) which cannot handle sign-in. ' +
-  'Open http://localhost:3000/dashboard/login.html instead — the Node server ' +
-  'serves the site AND the API together.';
+  'This page is being served by a plain static file server, which cannot ' +
+  'handle sign-in. Open the dashboard through the application server (the ' +
+  'same origin that serves the API) — it serves the site and the API together.';
 
 export async function api(path, options = {}) {
   let res;
