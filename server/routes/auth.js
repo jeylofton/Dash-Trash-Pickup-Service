@@ -49,10 +49,10 @@ router.post('/login', async (req, res) => {
   }
 
   attempts.delete(key);
-  const { token } = createSession(user.id, { ip: req.ip, userAgent: req.headers['user-agent'] });
+  const { token } = createSession(user.id, { ip: req.ip, userAgent: req.headers['user-agent'], role: user.role });
   run(`UPDATE users SET last_login_at = datetime('now') WHERE id = ?`, user.id);
 
-  res.cookie(COOKIE_NAME, token, cookieOptions());
+  res.cookie(COOKIE_NAME, token, cookieOptions(user.role));
   req.user = user;
   audit(req, 'auth.login', { entityType: 'user', entityId: user.id });
 

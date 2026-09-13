@@ -16,5 +16,11 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.19.2"
+  },
+  "comments": {
+    "overrides": "Force the patched qs across the tree. express@4 pins a qs in the vulnerable range (GHSA-x5fp-wj9c-mxmx, -4mjr-xmp4-gh2g, -q8mj-m7cp-5q26); 6.16 is API-compatible, so this fixes the DoS without an express@5 major bump."
+  },
+  "overrides": {
+    "qs": "^6.16.0"
   }
 }

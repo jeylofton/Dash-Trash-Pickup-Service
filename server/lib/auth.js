@@ -16,8 +16,17 @@ import { one, run } from '../db/index.js';
 
 const scrypt = promisify(_scrypt);
 const KEYLEN = 64;
-const SESSION_DAYS = 14;
 export const COOKIE_NAME = 'dash_session';
+
+/* A stolen or forgotten privileged cookie is far more dangerous than a
+   customer's, so staff sessions are short-lived while customers keep the
+   long, convenience-oriented lifetime. An unknown role fails safe to the
+   short one - we never hand out a two-week cookie to a role we can't name. */
+const PRIVILEGED_DAYS = 1;
+const CUSTOMER_DAYS = 14;
+function sessionDaysFor(role) {
+  return role === 'customer' ? CUSTOMER_DAYS : PRIVILEGED_DAYS;
+}
 
 export async function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
@@ -49,9 +58,9 @@ export function passwordProblem(password) {
 
 const sha256 = (s) => createHash('sha256').update(s).digest('hex');
 
-export function createSession(userId, { ip, userAgent } = {}) {
+export function createSession(userId, { ip, userAgent, role } = {}) {
   const token = randomBytes(32).toString('base64url');
-  const expires = new Date(Date.now() + SESSION_DAYS * 86400_000).toISOString();
+  const expires = new Date(Date.now() + sessionDaysFor(role) * 86400_000).toISOString();
   run(
     `INSERT INTO sessions (id, user_id, token_hash, expires_at, ip, user_agent)
      VALUES (?, ?, ?, ?, ?, ?)`,
@@ -91,12 +100,12 @@ export function purgeExpiredSessions() {
   run(`DELETE FROM sessions WHERE expires_at < datetime('now')`);
 }
 
-export function cookieOptions() {
+export function cookieOptions(role) {
   return {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
-    maxAge: SESSION_DAYS * 86400_000,
+    maxAge: sessionDaysFor(role) * 86400_000,
     path: '/',
   };
 }

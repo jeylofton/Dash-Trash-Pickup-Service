@@ -89,3 +89,43 @@ Three pieces, in this order:
 Sections 7, 10, 12, 31, 34 and 43 depend on production hosting, which does
 not exist yet. They should be settled when a host is chosen; they cannot be
 finished in the codebase alone.
+
+---
+
+## Phase 1 — hardening: done (branch `security-hardening`)
+
+- Security headers + HSTS(prod): `server/lib/security.js`, inline (no helmet).
+- HTTPS redirect (prod, proxy-aware, 308) + `trust proxy`.
+- Role-based session TTL: staff 1 day, customers 14 (`server/lib/auth.js`).
+- `npm audit`: 2 → 0 via a `qs` override (no express@5 major bump).
+- Demo password gated to non-production: removed from shipped
+  `login.html`/`login.js`; served only by `/api/dev-demo`
+  (`server/lib/demo-creds.js`), which 404s in production and otherwise lists
+  the **real** DB accounts. Inline `<script>` extracted to files and the
+  dev-reload snippet made external, so strict `script-src 'self'` holds.
+
+## Phase 2 — adversarial verification: done
+
+`server/test/security-acceptance.test.js` boots the real app over HTTP against
+a seeded in-memory DB and attacks it (13 tests). To make the app importable,
+`server.js` now exports `app` and gates `listen`/purge to direct execution.
+
+**Every guard held under attack:** unauthenticated access (401), role
+boundaries (customer→admin and employee→finance both 404, existence not
+leaked), photo IDOR (`GET /api/photos/:id` refuses a non-owner), cross-customer
+payment scoping (a `customerId` param cannot cross over), an employee
+servicing an unassigned stop (403), mass assignment on the profile endpoint,
+admin self-lock / self-role-change (400), password-hash never serialised, login
+brute force (429), and SQL injection in customer search (inert / parameterised).
+
+**One real gap found and fixed:** the public, unauthenticated
+`POST /api/promo/coupons/validate` had no rate limit, allowing coupon-code
+brute forcing (audit item 11). Added a reusable `rateLimiter()` in
+`server/lib/security.js` and applied it (20/min per IP) to that route.
+
+Notes: the customer router deliberately uses no `customerOwnsRecord` — it
+scopes every query by the session's customer id, so there is no client-supplied
+id to tamper with (stronger than a per-record check). `mayViewPhoto` handles
+`admin` but not `manager`; that fails closed (a manager is denied), so it is
+overly strict rather than a hole — worth revisiting if managers need photo
+access. Test suite: 42 → 67 green.

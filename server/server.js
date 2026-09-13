@@ -21,6 +21,8 @@ import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
 import { introCoupon } from './lib/coupons.js';
 import { attachUser, requirePasswordCurrent } from './lib/rbac.js';
 import { purgeExpiredSessions } from './lib/auth.js';
+import { securityHeaders, forceHttps } from './lib/security.js';
+import { devDemoCreds } from './lib/demo-creds.js';
 import { router as authRouter }     from './routes/auth.js';
 import { router as adminRouter }    from './routes/admin.js';
 import { router as employeeRouter } from './routes/employee.js';
@@ -34,6 +36,7 @@ import { router as rolesRouter } from './routes/roles.js';
 import { attachDevReload } from './lib/devreload.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -46,6 +49,16 @@ const SERVICE_ZIPS = new Set([
 ]);
 
 /* ---------- Middleware ---------- */
+
+// Behind a TLS proxy in production, express only trusts x-forwarded-* when
+// told to. Without this req.secure is always false and req.ip is the proxy.
+app.set('trust proxy', 1);
+
+// Send every request to HTTPS in production, and stamp every response with
+// the baseline hardening headers. Both run before anything else so no route
+// or static file can slip out unprotected.
+app.use(forceHttps);
+app.use(securityHeaders);
 
 // Photos arrive as base64 in JSON from the phone camera, so this has to be
 // larger than a typical API. storage.js still enforces the real per-file cap.
@@ -149,6 +162,11 @@ app.get('/api/intro-spots', async (req, res) => {
     res.status(500).json({ error: 'Could not read spot count.' });
   }
 });
+
+// Demo login hint - answers outside production only (see lib/demo-creds.js).
+// The login page renders its demo block solely from this, so the live site
+// never ships the demo password.
+app.get('/api/dev-demo', devDemoCreds);
 
 app.get('/api/service-area', (req, res) => {
   const zip = String(req.query.zip || '').trim();
@@ -278,19 +296,32 @@ app.use((err, req, res, next) => {
   res.status(err.status || 500).json({ error: 'Something went wrong. Please try again.' });
 });
 
-/* ---------- Boot ---------- */
+/* ---------- Boot ----------
+   Migrations run on import so a test that imports this module gets a
+   fully-built schema. Everything with a side effect on the outside world
+   - the listening socket and the purge timer - runs only when this file
+   is executed directly, so importing `app` for tests starts no server. */
 
 migrate();
 const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes(),
                       ...migrateAdminControls(), ...migrateDynamicRoles(),
                       ...migrateCommunityLifecycle()];
 if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
-purgeExpiredSessions();
-setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
 
-app.listen(PORT, async () => {
-  console.log(`\n  Dash Trash Pickup API`);
-  console.log(`  http://localhost:${PORT}\n`);
-  console.log('  Payments: DEMO - no real money moves');
-  console.log(`  Payment provider: ${providerName}\n`);
-});
+const isMain = (() => {
+  try { return process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); }
+  catch { return false; }
+})();
+
+if (isMain) {
+  purgeExpiredSessions();
+  setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
+  app.listen(PORT, async () => {
+    console.log(`\n  Dash Trash Pickup API`);
+    console.log(`  http://localhost:${PORT}\n`);
+    console.log('  Payments: DEMO - no real money moves');
+    console.log(`  Payment provider: ${providerName}\n`);
+  });
+}
+
+export { app };
