@@ -23,6 +23,24 @@ export function migrate() {
   db.exec(readFileSync(join(HERE, 'schema_discounts.sql'), 'utf8'));
   db.exec(readFileSync(join(HERE, 'schema_communities.sql'), 'utf8'));
   db.exec(readFileSync(join(HERE, 'schema_roles.sql'), 'utf8'));
+  db.exec(readFileSync(join(HERE, 'schema_payments.sql'), 'utf8'));
+
+  // Add promotional-term columns, guarded for idempotency
+  const addColumn = (table, column, decl) => {
+    const has = db.prepare(`PRAGMA table_info(${table})`).all()
+                  .some(c => c.name === column);
+    if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  };
+
+  // The promotional price and how many billing periods it still covers.
+  // Copied from the coupon at signup and frozen, exactly like
+  // locked_price_cents - so editing the coupon later cannot re-price
+  // a customer who already enrolled.
+  addColumn('subscriptions', 'promo_price_cents', 'INTEGER');
+  addColumn('subscriptions', 'promo_periods_remaining', 'INTEGER');
+
+  // Lets a discount say "for N billing periods". NULL means forever.
+  addColumn('coupons', 'duration_periods', 'INTEGER');
 }
 
 /* Small helpers so route code reads cleanly. */
