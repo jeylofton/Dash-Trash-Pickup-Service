@@ -75,9 +75,9 @@ export function generateServiceDay(date = today()) {
     for (const route of routes) {
       for (const { unit_id, customer_id } of unitsForRoute(route.id, date)) {
         const res = run(
-          `INSERT OR IGNORE INTO service_stops (service_date, route_id, unit_id, customer_id)
-           VALUES (?, ?, ?, ?)`,
-          date, route.id, unit_id, customer_id ?? null
+          `INSERT OR IGNORE INTO service_stops (service_date, route_id, unit_id, customer_id, is_demo)
+           VALUES (?, ?, ?, ?, ?)`,
+          date, route.id, unit_id, customer_id ?? null, route.is_demo ?? 0
         );
         created += res.changes;
       }
@@ -94,7 +94,7 @@ export function serviceDayStats(date = today()) {
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
         SUM(CASE WHEN status = 'issue'     THEN 1 ELSE 0 END) AS issues,
         SUM(CASE WHEN status = 'pending'   THEN 1 ELSE 0 END) AS remaining
-       FROM service_stops WHERE service_date = ?`, date
+       FROM service_stops WHERE service_date = ? AND is_demo = 0`, date
   );
   return {
     date,

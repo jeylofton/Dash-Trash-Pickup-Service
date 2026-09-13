@@ -56,6 +56,26 @@ export function migrate() {
   }
 }
 
+/* Practice / sandbox isolation flags. Rows created for the training accounts
+   are flagged is_demo = 1 so the owner's dashboards and reports exclude them
+   (a true blank slate), while the practice accounts still see their own data.
+   Every real row defaults to 0.
+
+   This MUST run AFTER the admin migrations: migrate_admin rebuilds the users,
+   employees, and communities tables, which would drop columns added earlier.
+   Idempotent, so both the server boot and the seed script call it. */
+export function migrateDemoFlags() {
+  const addColumn = (table, column, decl) => {
+    const has = db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === column);
+    if (!has) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${decl}`);
+  };
+  for (const t of ['users', 'customers', 'employees', 'communities', 'units',
+    'routes', 'route_stops', 'route_assignments', 'service_stops', 'subscriptions',
+    'payments', 'pickup_records', 'pickup_photos', 'time_entries', 'service_credits']) {
+    addColumn(t, 'is_demo', 'INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
 /* Small helpers so route code reads cleanly. */
 export const one  = (sql, ...p) => db.prepare(sql).get(...p);
 export const all  = (sql, ...p) => db.prepare(sql).all(...p);

@@ -39,9 +39,9 @@ router.get('/summary', (req, res) => {
   const day = serviceDayStats(today());
 
   const clockedIn = one(
-    `SELECT COUNT(*) AS n FROM time_entries WHERE clock_out_at IS NULL`).n;
+    `SELECT COUNT(*) AS n FROM time_entries WHERE clock_out_at IS NULL AND is_demo = 0`).n;
   const activeCustomers = one(
-    `SELECT COUNT(*) AS n FROM customers WHERE status='active'`).n;
+    `SELECT COUNT(*) AS n FROM customers WHERE status='active' AND is_demo = 0`).n;
 
   res.json({
     range: { start, end, label: req.query.range || 'month' },
@@ -104,7 +104,7 @@ router.get('/charts', (req, res) => {
     customersOverTime: all(
       `SELECT strftime('${bucket === 'month' ? '%Y-%m' : '%Y-%m-%d'}', created_at) AS bucket,
               COUNT(*) AS added FROM customers
-        WHERE date(created_at) BETWEEN ? AND ? GROUP BY bucket ORDER BY bucket`, start, end),
+        WHERE is_demo = 0 AND date(created_at) BETWEEN ? AND ? GROUP BY bucket ORDER BY bucket`, start, end),
   });
 });
 
@@ -373,7 +373,7 @@ router.get('/employee-performance', (req, res) => {
              WHERE pr.employee_id = e.id AND pr.status = 'issue'
                AND pr.service_date BETWEEN ? AND ?) AS issues
       FROM employees e JOIN users u ON u.id = e.user_id
-     WHERE e.status = 'active'`, start, end, start, end, start, end)
+     WHERE e.status = 'active' AND e.is_demo = 0`, start, end, start, end, start, end)
     .map(r => {
       const labor = laborByEmployee(start, end).find(l => l.employee_id === r.employee_id);
       return {

@@ -68,6 +68,7 @@ router.get('/', requirePermission('customers.view','communities.view'), (req, re
      ${status ? 'WHERE c.status = ?'
        : assignable ? `WHERE c.status NOT IN ('archived','inactive')`
        : `WHERE c.status != 'archived'`}
+       AND c.is_demo = 0
      ORDER BY CASE c.status WHEN 'active' THEN 0 WHEN 'scheduled' THEN 1
                             WHEN 'driver_needed' THEN 2 WHEN 'waiting_list' THEN 3 ELSE 4 END,
               c.name`, ...(status ? [status] : []));

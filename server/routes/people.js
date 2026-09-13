@@ -51,6 +51,7 @@ router.get('/employees', (req, res) => {
   if (q) { where.push('(u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR e.employee_code LIKE ?)');
            params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`); }
   if (status) { where.push('e.status = ?'); params.push(status); }
+  where.push('e.is_demo = 0');   // training employee never appears in the owner's list
 
   res.json(all(`
     SELECT e.id, e.employee_code, e.hire_date, e.status, e.end_date,
@@ -301,6 +302,7 @@ router.get('/accounts', requirePermission('system.users.manage'), (req, res) => 
                 params.push(`%${q}%`, `%${q}%`, `%${q}%`); }
   if (status === 'locked') where.push(`u.locked_until IS NOT NULL AND u.locked_until > datetime('now')`);
   else if (status)         { where.push('u.status = ?'); params.push(status); }
+  where.push('u.is_demo = 0');   // training accounts stay out of the owner's account list
 
   res.json(all(`
     SELECT u.id, u.email, u.role, u.first_name, u.last_name, u.phone, u.status,

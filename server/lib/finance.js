@@ -50,7 +50,7 @@ const COLLECTED = `status = 'paid'`;
 export function revenueTotal(start, end) {
   return one(
     `SELECT COALESCE(SUM(amount_cents),0) AS c FROM payments
-      WHERE ${COLLECTED} AND date(COALESCE(paid_at, created_at)) BETWEEN ? AND ?`,
+      WHERE ${COLLECTED} AND is_demo = 0 AND date(COALESCE(paid_at, created_at)) BETWEEN ? AND ?`,
     start, end).c;
 }
 
@@ -61,7 +61,7 @@ export function revenueByPlan(start, end) {
        FROM payments p
        LEFT JOIN subscriptions s ON s.id = p.subscription_id
        LEFT JOIN plans pl ON pl.id = s.plan_id
-      WHERE p.${COLLECTED} AND date(COALESCE(p.paid_at, p.created_at)) BETWEEN ? AND ?
+      WHERE p.${COLLECTED} AND p.is_demo = 0 AND date(COALESCE(p.paid_at, p.created_at)) BETWEEN ? AND ?
       GROUP BY pl.id ORDER BY cents DESC`, start, end);
 }
 
@@ -76,7 +76,7 @@ export function revenueByCommunity(start, end) {
        LEFT JOIN service_addresses sa ON sa.customer_id = c.id AND sa.end_date IS NULL
        LEFT JOIN units u ON u.id = sa.unit_id
        LEFT JOIN communities com ON com.id = u.community_id
-      WHERE p.${COLLECTED} AND date(COALESCE(p.paid_at, p.created_at)) BETWEEN ? AND ?
+      WHERE p.${COLLECTED} AND p.is_demo = 0 AND date(COALESCE(p.paid_at, p.created_at)) BETWEEN ? AND ?
       -- GROUP BY com.id ONLY. Grouping by the output alias "label" would bind
       -- to units.label instead (a real column shadows an alias), producing one
       -- row per unit rather than per community.
@@ -110,7 +110,7 @@ export function revenueByRoute(start, end) {
        JOIN unit_routes ur ON ur.unit_id = sa.unit_id
        JOIN unit_route_count urc ON urc.unit_id = sa.unit_id
        JOIN routes r ON r.id = ur.route_id
-      WHERE p.${COLLECTED} AND date(COALESCE(p.paid_at, p.created_at)) BETWEEN ? AND ?
+      WHERE p.${COLLECTED} AND p.is_demo = 0 AND date(COALESCE(p.paid_at, p.created_at)) BETWEEN ? AND ?
       GROUP BY r.id ORDER BY cents DESC`, start, end);
 }
 
@@ -120,7 +120,7 @@ export function revenueSeries(start, end, bucket = 'day') {
     `SELECT strftime('${fmt}', COALESCE(paid_at, created_at)) AS bucket,
             SUM(amount_cents) AS cents
        FROM payments
-      WHERE ${COLLECTED} AND date(COALESCE(paid_at, created_at)) BETWEEN ? AND ?
+      WHERE ${COLLECTED} AND is_demo = 0 AND date(COALESCE(paid_at, created_at)) BETWEEN ? AND ?
       GROUP BY bucket ORDER BY bucket`, start, end);
 }
 
@@ -149,7 +149,7 @@ export function laborTotal(start, end) {
     `SELECT COALESCE(SUM(${COST_SQL}),0) AS cents,
             COALESCE(SUM(CASE WHEN te.clock_out_at IS NOT NULL THEN ${MINUTES_SQL} ELSE 0 END),0) AS minutes
        FROM time_entries te
-      WHERE te.work_date BETWEEN ? AND ?`, start, end);
+      WHERE te.is_demo = 0 AND te.work_date BETWEEN ? AND ?`, start, end);
   return { cents: row.cents, minutes: row.minutes, hours: Math.round(row.minutes / 6) / 10 };
 }
 
@@ -164,7 +164,7 @@ export function laborByEmployee(start, end) {
        FROM time_entries te
        JOIN employees e ON e.id = te.employee_id
        JOIN users u ON u.id = e.user_id
-      WHERE te.work_date BETWEEN ? AND ?
+      WHERE te.is_demo = 0 AND te.work_date BETWEEN ? AND ?
       GROUP BY e.id ORDER BY cents DESC`, start, end);
 }
 
@@ -178,7 +178,7 @@ export function laborByRoute(start, end) {
             COALESCE(SUM(CASE WHEN te.clock_out_at IS NOT NULL THEN ${MINUTES_SQL} ELSE 0 END),0) AS minutes
        FROM time_entries te
        JOIN routes r ON r.id = te.route_id
-      WHERE te.work_date BETWEEN ? AND ?
+      WHERE te.is_demo = 0 AND te.work_date BETWEEN ? AND ?
       GROUP BY r.id ORDER BY cents DESC`, start, end);
 }
 
@@ -188,7 +188,7 @@ export function laborSeries(start, end, bucket = 'day') {
     `SELECT strftime('${fmt}', te.work_date) AS bucket,
             COALESCE(SUM(${COST_SQL}),0) AS cents
        FROM time_entries te
-      WHERE te.work_date BETWEEN ? AND ?
+      WHERE te.is_demo = 0 AND te.work_date BETWEEN ? AND ?
       GROUP BY bucket ORDER BY bucket`, start, end);
 }
 
@@ -258,13 +258,13 @@ export function serviceCreditTotal(start, end) {
     `SELECT COALESCE(SUM(COALESCE(approved_cents, requested_cents)),0) AS c
        FROM service_credits
       WHERE status IN ('auto_approved','approved','modified','applied')
-        AND date(requested_at) BETWEEN ? AND ?`, start, end).c;
+        AND is_demo = 0 AND date(requested_at) BETWEEN ? AND ?`, start, end).c;
 }
 
 export function refundTotal(start, end) {
   return one(
     `SELECT COALESCE(SUM(amount_cents),0) AS c FROM payments
-      WHERE status = 'refunded' AND date(COALESCE(paid_at, created_at)) BETWEEN ? AND ?`,
+      WHERE status = 'refunded' AND is_demo = 0 AND date(COALESCE(paid_at, created_at)) BETWEEN ? AND ?`,
     start, end).c;
 }
 
@@ -416,7 +416,7 @@ export function communityProfitability(start, end) {
 
 export function unitEconomics(start, end) {
   const activeCustomers = one(
-    `SELECT COUNT(*) AS n FROM customers WHERE status = 'active'`).n;
+    `SELECT COUNT(*) AS n FROM customers WHERE status = 'active' AND is_demo = 0`).n;
   const c = companyProfit(start, end);
   if (!activeCustomers) {
     return { customers: 0, revenuePerCustomer: 0, costPerCustomer: 0, profitPerCustomer: 0, marginPct: 0 };
@@ -463,7 +463,7 @@ export function breakEven(start, end) {
  */
 export function pricingSimulation(start, end, prices = [22, 25, 27, 30, 33]) {
   const c = companyProfit(start, end);
-  const customers = one(`SELECT COUNT(*) AS n FROM customers WHERE status='active'`).n;
+  const customers = one(`SELECT COUNT(*) AS n FROM customers WHERE status='active' AND is_demo = 0`).n;
   if (!customers) return { customers: 0, rows: [] };
 
   // Current average monthly revenue per customer over the window.

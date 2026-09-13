@@ -212,6 +212,7 @@ router.get('/routes/all', requirePermission('routes.view'), (req, res) => {
            (SELECT COUNT(*) FROM route_versions v WHERE v.route_id = r.id) AS version_count
       FROM routes r
      ${status ? 'WHERE r.status = ?' : "WHERE r.status != 'archived'"}
+       AND r.is_demo = 0
      ORDER BY r.day_of_week, r.name`, ...(status ? [status] : []))
     .map(r => {
       const d = currentDriver(r.id);

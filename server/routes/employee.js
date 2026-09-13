@@ -178,20 +178,22 @@ router.post('/pickups', async (req, res) => {
   }
 
   const recordId = tx(() => {
+    // A training employee's pickups (and their photos) stay in the demo sandbox.
+    const demo = req.employee.is_demo ?? 0;
     const id = run(`
       INSERT INTO pickup_records
         (service_stop_id, service_date, unit_id, customer_id, employee_id, route_id,
-         status, issue_code, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         status, issue_code, notes, is_demo)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       stop.id, date, unitId, stop.customer_id, req.employee.id, stop.route_id,
-      status, status === 'issue' ? issueCode : null, notes ?? null).lastInsertRowid;
+      status, status === 'issue' ? issueCode : null, notes ?? null, demo).lastInsertRowid;
 
     run('UPDATE service_stops SET status = ? WHERE id = ?',
         status === 'completed' ? 'completed' : 'issue', stop.id);
 
     if (stored) {
-      run(`INSERT INTO pickup_photos (pickup_record_id, storage_key, mime_type, bytes, uploaded_by)
-           VALUES (?, ?, ?, ?, ?)`, id, stored.key, stored.mimeType, stored.bytes, req.user.id);
+      run(`INSERT INTO pickup_photos (pickup_record_id, storage_key, mime_type, bytes, uploaded_by, is_demo)
+           VALUES (?, ?, ?, ?, ?, ?)`, id, stored.key, stored.mimeType, stored.bytes, req.user.id, demo);
     }
     return id;
   });

@@ -86,18 +86,22 @@ export function createCredit({
   }
 
   const approved = (status === 'auto_approved' || status === 'approved') ? amountCents : null;
+  // A credit for a training customer stays in the demo sandbox, out of the
+  // owner's service-credit totals.
+  const demo = one('SELECT is_demo FROM customers WHERE id = ?', customerId)?.is_demo ?? 0;
 
   const id = run(
     `INSERT INTO service_credits
        (customer_id, requested_by_user_id, requested_by_employee_id, approved_by_user_id,
         requested_cents, approved_cents, reason, notes,
-        pickup_record_id, community_id, route_id, status, decided_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        pickup_record_id, community_id, route_id, status, decided_at, is_demo)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     customerId, userId ?? null, employeeId ?? null,
     approved != null ? (userId ?? null) : null,
     amountCents, approved, reason, notes ?? null,
     pickupRecordId ?? null, communityId ?? null, routeId ?? null,
-    status, approved != null ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null
+    status, approved != null ? new Date().toISOString().slice(0, 19).replace('T', ' ') : null,
+    demo
   ).lastInsertRowid;
 
   return one('SELECT * FROM service_credits WHERE id = ?', id);

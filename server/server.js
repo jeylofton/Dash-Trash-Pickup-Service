@@ -13,7 +13,7 @@
 
 import 'dotenv/config';
 import express from 'express';
-import { migrate, one } from './db/index.js';
+import { migrate, one, migrateDemoFlags } from './db/index.js';
 import { enrol } from './lib/signup.js';
 import { payments, providerName } from './lib/payments/index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
@@ -330,6 +330,7 @@ const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssu
                       ...migrateAdminControls(), ...migrateDynamicRoles(),
                       ...migrateCommunityLifecycle()];
 if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
+migrateDemoFlags();   // after the admin rebuilds, so is_demo columns survive
 
 const isMain = (() => {
   try { return process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); }

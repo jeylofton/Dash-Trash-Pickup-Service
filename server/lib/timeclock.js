@@ -29,14 +29,16 @@ export function clockIn(employeeId, { routeId, lat, lng, device } = {}) {
   }
   const date = new Date().toISOString().slice(0, 10);
   const rate = rateOn(employeeId, date);
+  // A training employee's shifts must stay out of the owner's payroll.
+  const demo = one('SELECT is_demo FROM employees WHERE id = ?', employeeId)?.is_demo ?? 0;
 
   const id = run(
     `INSERT INTO time_entries
        (employee_id, route_id, work_date, clock_in_at, clock_in_lat, clock_in_lng,
-        device, pay_type_snapshot, rate_cents_snapshot)
-     VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, ?)`,
+        device, pay_type_snapshot, rate_cents_snapshot, is_demo)
+     VALUES (?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)`,
     employeeId, routeId ?? null, date, lat ?? null, lng ?? null,
-    device ?? null, rate.pay_type, rate.rate_cents
+    device ?? null, rate.pay_type, rate.rate_cents, demo
   ).lastInsertRowid;
 
   return one(`SELECT *, ${MINUTES_SQL} AS minutes FROM time_entries WHERE id = ?`, id);
