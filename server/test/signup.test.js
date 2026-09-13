@@ -64,3 +64,16 @@ test('a weak password is rejected', async () => {
   assert.equal(r.ok, false);
   assert.match(r.error, /password/i);
 });
+
+test('a provider that throws during charge is caught, marks the payment failed, and never activates service', async () => {
+  const r = await enrol({ ...base, email: 'throws@test.local', outcome: 'not-a-real-outcome' });
+  assert.equal(r.ok, false);
+  assert.ok(r.paymentId, 'the ids from the pre-charge transaction must survive the catch block');
+
+  const pay = one(`SELECT * FROM payments WHERE id = ?`, r.paymentId);
+  assert.equal(pay.status, 'failed');
+  assert.ok(pay.failure_reason, 'failure_reason must be populated when the provider throws');
+
+  const sub = one(`SELECT * FROM subscriptions WHERE id = ?`, r.subscriptionId);
+  assert.equal(sub.status, 'pending', 'a thrown provider error must never activate service');
+});
