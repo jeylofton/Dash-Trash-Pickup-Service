@@ -213,6 +213,11 @@
       });
     });
 
+    // The advertised rate follows the live promotion (spotsState.priceDollars)
+    // when the API has supplied one; CONFIG.intro.price is only the offline
+    // fallback, never the source of truth once the server has spoken.
+    const introPrice = spotsState.priceDollars ?? CONFIG.intro.price;
+
     // plan picker labels inside the signup form
     $$('[data-option-price]').forEach(el => {
       const key = el.dataset.optionPrice;
@@ -220,12 +225,12 @@
       if (!p) return;
       const per = { intro: '/mo', monthly: '/mo', quarterly: '/qtr', annual: '/yr' }[key];
       el.textContent = key === 'intro'
-        ? `${money(p.total)}/mo for ${p.termMonths} mo, then ${money(p.after)}/mo`
+        ? `${money(introPrice)}/mo for ${p.termMonths} mo, then ${money(p.after)}/mo`
         : money(p.total) + per;
     });
 
-    $$('[data-intro-price]').forEach(el => { el.textContent = money(CONFIG.intro.price); });
-    $$('[data-intro-total]').forEach(el => { el.textContent = String(CONFIG.intro.totalSpots); });
+    $$('[data-intro-price]').forEach(el => { el.textContent = money(introPrice); });
+    $$('[data-intro-total]').forEach(el => { el.textContent = String(spotsState.totalSpots ?? CONFIG.intro.totalSpots); });
 
     /* The introductory rate is a TERM, not a permanent price. These two hooks
        disclose that everywhere the offer appears. Both read from CONFIG, so
@@ -234,23 +239,44 @@
     $$('[data-intro-after]').forEach(el => { el.textContent = money(PRICING.intro.after); });
   }
 
-  let spotsState = { claimed: 0, remaining: CONFIG.intro.totalSpots, soldOut: false };
+  let spotsState = {
+    claimed: 0, remaining: CONFIG.intro.totalSpots, soldOut: false,
+    totalSpots: null, priceDollars: null,
+  };
 
   async function renderSpots() {
-    const { claimed } = await fetchIntroSpots();
+    const data = await fetchIntroSpots();
+    const claimed = data.claimed;
     const unavailable = claimed == null;
-    const remaining = unavailable ? null : Math.max(CONFIG.intro.totalSpots - claimed, 0);
-    // Unknown is not the same as sold out - without a real count, assume
-    // the offer is still open rather than hiding it on a guess; checkout
-    // itself is still the authority on whether a spot is actually granted.
-    spotsState = { claimed, remaining, soldOut: !unavailable && remaining === 0 };
+    // totalSpots and priceDollars come from the live promotion; CONFIG's
+    // numbers are only the offline fallback for when the API can't be
+    // reached, never a substitute for a real API answer.
+    const totalSpots = typeof data.totalSpots === 'number' ? data.totalSpots : CONFIG.intro.totalSpots;
+    const remaining = unavailable ? null : Math.max(totalSpots - claimed, 0);
+    // The server is the sole authority on whether the offer is open - it
+    // already accounts for limit reached, expired, scheduled, and disabled
+    // promotions. The client never re-derives that judgement; any status
+    // other than 'active' closes the offer, known or not yet enumerated.
+    const closed = !unavailable && data.status != null && data.status !== 'active';
+    // Unknown is not the same as closed - without a real count/status,
+    // assume the offer is still open rather than hiding it on a guess;
+    // checkout itself is still the authority on whether a spot is granted.
+    spotsState = {
+      claimed, remaining, totalSpots,
+      priceDollars: typeof data.priceDollars === 'number' ? data.priceDollars : null,
+      soldOut: closed || (!unavailable && remaining === 0),
+    };
+
+    // The intro price/total shown in the pricing cards must track this same
+    // live data, so re-run that part of renderPricing now that it's known.
+    renderPricing();
 
     $$('[data-spots-remaining]').forEach(el => {
       el.hidden = unavailable;
       if (!unavailable) {
-        el.textContent = remaining > 0
-          ? `${remaining} introductory spots remaining.`
-          : 'All introductory spots have been claimed.';
+        el.textContent = spotsState.soldOut
+          ? 'The introductory offer has reached its limit.'
+          : `${remaining} introductory spots remaining.`;
       }
     });
 
