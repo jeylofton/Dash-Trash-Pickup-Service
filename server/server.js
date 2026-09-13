@@ -33,7 +33,10 @@ import { router as peopleRouter }   from './routes/people.js';
 import { router as discountRouter } from './routes/discounts.js';
 import { router as communityRouter, publicCommunityRoutes } from './routes/communities.js';
 import { router as rolesRouter } from './routes/roles.js';
-import { attachDevReload } from './lib/devreload.js';
+import { router as settingsRouter } from './routes/settings.js';
+import { publicBranding } from './lib/branding.js';
+import { attachDevReload, DEV_RELOAD_SNIPPET } from './lib/devreload.js';
+import { attachBrandedHtml } from './lib/htmlserve.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
@@ -139,6 +142,12 @@ app.get('/api/config', (req, res) => {
   });
 });
 
+// Public business identity for the browser to render (name, short name,
+// website, support contacts, address). Never the internal email/phone.
+app.get('/api/branding', (req, res) => {
+  res.json(publicBranding());
+});
+
 app.get('/api/intro-spots', async (req, res) => {
   try {
     /* Read from the real coupon system. If an install has no launch coupon
@@ -223,6 +232,7 @@ app.use('/api/people', peopleRouter);     // admin-only, enforced inside the rou
 app.use('/api/promo', discountRouter);    // per-permission, enforced inside the router
 app.use('/api/communities', communityRouter);
 app.use('/api/roles', rolesRouter);       // roles, permissions, and route management
+app.use('/api/settings', settingsRouter); // system settings; per-permission inside
 publicCommunityRoutes(app);              // /api/service-check and /api/waitlist are public
 
 /* Gate the dashboard HTML itself. Without this a signed-out visitor could
@@ -259,14 +269,7 @@ app.use('/dashboard', (req, res, next) => {
   next();
 });
 
-/* Live reload in development. Must come before EVERY express.static mount so
-   it can inject its snippet into the HTML rather than the raw file going out. */
-const DEV = process.env.NODE_ENV !== 'production' && process.env.DEV_RELOAD !== '0';
-if (DEV) attachDevReload(app, SITE_ROOT);
-
-app.use('/dashboard', express.static(join(SITE_ROOT, 'dashboard'), { extensions: ['html'] }));
-
-/* Block private directories BEFORE static serving.
+/* Block private directories BEFORE anything serves a file.
    A setHeaders hook cannot do this - it can set a status code but the file
    body is still streamed, which would serve the source code and the database
    itself (password hashes, customer PII) to anyone who asked. */
@@ -276,6 +279,26 @@ app.use((req, res, next) => {
   if (PRIVATE_PATH.test(req.path)) return res.status(404).json({ error: 'Not found.' });
   next();
 });
+
+/* Live reload in development: the file watcher, SSE stream, and client
+   script. The reload snippet is injected into HTML by the branded-HTML
+   middleware below, which owns HTML output in every environment. */
+const DEV = process.env.NODE_ENV !== 'production' && process.env.DEV_RELOAD !== '0';
+if (DEV) attachDevReload(app, SITE_ROOT);
+
+/* Serve every HTML page with {{brand.*}} tokens resolved (and, in dev, the
+   reload snippet appended). Must come before the static mounts so it, not
+   express.static, is what answers for .html. */
+attachBrandedHtml(app, SITE_ROOT, {
+  decorate: DEV
+    ? (html) => html.includes('</body>')
+        ? html.replace('</body>', `${DEV_RELOAD_SNIPPET}\n</body>`)
+        : html + DEV_RELOAD_SNIPPET
+    : null,
+});
+
+/* Static assets (css, js, images). HTML is already handled above. */
+app.use('/dashboard', express.static(join(SITE_ROOT, 'dashboard'), { extensions: ['html'] }));
 
 /* The public marketing site. */
 app.use(express.static(SITE_ROOT, {
@@ -317,7 +340,7 @@ if (isMain) {
   purgeExpiredSessions();
   setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
   app.listen(PORT, async () => {
-    console.log(`\n  Dash Trash Pickup API`);
+    console.log(`\n  ${publicBranding().name} API`);
     console.log(`  http://localhost:${PORT}\n`);
     console.log('  Payments: DEMO - no real money moves');
     console.log(`  Payment provider: ${providerName}\n`);

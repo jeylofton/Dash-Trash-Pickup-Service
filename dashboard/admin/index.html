@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Admin · Dash Trash Pickup</title>
+<title>Admin · {{brand.name}}</title>
 <link rel="icon" type="image/png" href="/images/logo/favicon-32.png" />
 <link rel="stylesheet" href="/dashboard/dash.css" />
 </head>
@@ -11,7 +11,7 @@
   <header class="topbar">
     <div class="topbar-brand">
       <img src="/images/logo/mark-128-dark.png" alt="" />
-      <span>Dash Trash Pickup<small>Operations</small></span>
+      <span>{{brand.name}}<small>Operations</small></span>
     </div>
     <div class="topbar-right">
       <span class="role-chip">Admin</span>
@@ -36,6 +36,7 @@
     <button data-tab="coupons">Coupons</button>
     <button data-tab="credits">Service Credits</button>
     <button data-tab="reports">Reports</button>
+    <button data-tab="settings" data-perm="system.settings.view" hidden>System Settings</button>
   </nav>
 
   <main>
@@ -445,6 +446,40 @@
       <div class="card">
         <h2>Open issues</h2>
         <div class="table-wrap"><table id="issueTable"></table></div>
+      </div>
+    </section>
+
+    <section data-panel="settings" hidden>
+      <h1>System Settings</h1>
+      <p class="muted small" style="margin-top:-8px">White-label configuration for this installation.</p>
+      <div class="card" id="businessProfileCard">
+        <h2>Business Profile</h2>
+        <p class="muted small">The business identity shown throughout the app, on the public site,
+          in page titles, and in reports. Changing the name updates it everywhere.</p>
+        <div class="row">
+          <div><label for="bpName">Business name</label><input id="bpName" maxlength="100" /></div>
+          <div><label for="bpShort">Short name</label><input id="bpShort" maxlength="40" /></div>
+        </div>
+        <div class="row">
+          <div><label for="bpWebsite">Website</label><input id="bpWebsite" maxlength="200" placeholder="https://example.com" /></div>
+          <div><label for="bpAddress">Address</label><input id="bpAddress" maxlength="200" /></div>
+        </div>
+        <div class="row">
+          <div><label for="bpSupportEmail">Support email</label><input id="bpSupportEmail" type="email" maxlength="200" /></div>
+          <div><label for="bpSupportPhone">Support phone</label><input id="bpSupportPhone" maxlength="40" /></div>
+        </div>
+        <div class="row">
+          <div><label for="bpEmail">Business email <span class="muted small">(internal)</span></label><input id="bpEmail" type="email" maxlength="200" /></div>
+          <div><label for="bpPhone">Business phone <span class="muted small">(internal)</span></label><input id="bpPhone" maxlength="40" /></div>
+        </div>
+        <p class="msg" id="bpMsg" hidden></p>
+        <button class="btn btn-primary" id="bpSave">Save changes</button>
+        <button class="btn" id="bpCancel" data-cancel>Cancel</button>
+      </div>
+      <div class="card">
+        <h2>More settings coming soon</h2>
+        <p class="muted small">Branding &amp; logo, appearance &amp; themes, practice accounts, and
+          authentication settings will appear here as they are added.</p>
       </div>
     </section>
   </main>

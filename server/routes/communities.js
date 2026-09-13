@@ -13,6 +13,7 @@ import { audit } from '../lib/audit.js';
 import { DAY_NAMES, today } from '../lib/schedule.js';
 import { dollars } from '../lib/finance.js';
 import { deletability, assertDeletable } from '../lib/deletable.js';
+import { branding } from '../lib/branding.js';
 import { availableActions, resolveAction } from '../lib/lifecycle.js';
 import { COMMUNITY_LIFECYCLE, COMMUNITY_STATUSES, readiness, isServicing }
   from '../lib/community_lifecycle.js';
@@ -579,8 +580,8 @@ export function publicCommunityRoutes(app) {
         message: c.status === 'active'
           ? 'We service this community.'
           : c.tentative_start_date
-            ? `Dash Trash Pickup is preparing service for this community. Tentative start: ${c.tentative_start_date}.`
-            : 'Dash Trash Pickup is preparing service for this community.',
+            ? `${branding().name} is preparing service for this community. Tentative start: ${c.tentative_start_date}.`
+            : `${branding().name} is preparing service for this community.`,
       })),
     });
   });

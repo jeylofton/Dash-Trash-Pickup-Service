@@ -24,6 +24,7 @@ export function migrate() {
   db.exec(readFileSync(join(HERE, 'schema_communities.sql'), 'utf8'));
   db.exec(readFileSync(join(HERE, 'schema_roles.sql'), 'utf8'));
   db.exec(readFileSync(join(HERE, 'schema_payments.sql'), 'utf8'));
+  db.exec(readFileSync(join(HERE, 'schema_branding.sql'), 'utf8'));
 
   // Add promotional-term columns, guarded for idempotency
   const addColumn = (table, column, decl) => {
