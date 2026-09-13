@@ -6,6 +6,7 @@
 import { Router } from 'express';
 import { one, all, run, tx } from '../db/index.js';
 import { requireAuth, requireEmployee, currentEmployee } from '../lib/rbac.js';
+import { rateLimiter } from '../lib/security.js';
 import { requirePermission, hasPermission, setting, setSetting, permissionsFor } from '../lib/permissions.js';
 import { audit } from '../lib/audit.js';
 import {
@@ -210,7 +211,10 @@ router.get('/coupon-analytics', requirePermission('coupons.analytics.view'), (re
 });
 
 /* ---------- public: check a code without redeeming it ---------- */
-router.post('/coupons/validate', (req, res) => {
+/* Public and unauthenticated (the signup wizard calls it), so it is
+   rate-limited to stop an attacker brute-forcing coupon codes. */
+const validateLimiter = rateLimiter({ max: 20, windowMs: 60_000 });
+router.post('/coupons/validate', validateLimiter, (req, res) => {
   const { code, planCode, priceDollars } = req.body || {};
   const plan = planCode ? one('SELECT * FROM plans WHERE code = ?', planCode) : null;
   const priceCents = priceDollars != null

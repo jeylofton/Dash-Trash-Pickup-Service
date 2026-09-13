@@ -28,40 +28,13 @@
         <button class="btn btn-primary" style="width:100%" type="submit" id="loginBtn">Sign in</button>
       </form>
 
-      <div class="demo-creds">
-        <strong>Demo accounts</strong> — password <code data-fill-pw>DashDemo2026</code><br />
-        <code data-fill="admin@dashtrashpickup.com">admin@dashtrashpickup.com</code> — admin<br />
-        <code data-fill="marcus@dashtrashpickup.com">marcus@dashtrashpickup.com</code> — employee<br />
-        <code data-fill="john.smith0@example.com">john.smith0@example.com</code> — customer
-        <p class="small" style="margin:9px 0 0">Click an address to fill the form.</p>
-      </div>
+      <!-- Demo accounts are injected here by login.js, and only in development
+           (the /api/dev-demo endpoint 404s in production). Nothing about the
+           demo - least of all the password - ships in the live page source. -->
+      <div class="demo-creds" id="demoCreds" hidden></div>
     </div>
   </div>
 
-<script type="module">
-  import { api, $, $$ } from '/dashboard/dash.js';
-
-  $$('[data-fill]').forEach(el => el.addEventListener('click', () => {
-    $('#email').value = el.dataset.fill;
-    $('#password').value = 'DashDemo2026';
-    $('#password').focus();
-  }));
-
-  $('#loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const btn = $('#loginBtn'), err = $('#loginError');
-    err.hidden = true; btn.disabled = true; btn.textContent = 'Signing in…';
-    try {
-      const res = await api('/api/auth/login', {
-        method: 'POST',
-        body: JSON.stringify({ email: $('#email').value, password: $('#password').value }),
-      });
-      location.href = res.redirect;
-    } catch (ex) {
-      err.textContent = ex.message; err.hidden = false;
-      btn.disabled = false; btn.textContent = 'Sign in';
-    }
-  });
-</script>
+<script type="module" src="/dashboard/login.js"></script>
 </body>
 </html>

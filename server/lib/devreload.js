@@ -12,14 +12,15 @@ import { watch } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 
-const SNIPPET = `
-<script>
-(() => {
+/* Served from its own route, not inlined, so the site's strict
+   Content-Security-Policy (script-src 'self') accepts it - dev then
+   exercises the exact policy production ships. */
+const RELOAD_JS = `(() => {
   const es = new EventSource('/__dev/reload');
   es.onmessage = (e) => { if (e.data === 'reload') location.reload(); };
   es.onerror = () => { /* server restarting; EventSource retries on its own */ };
-})();
-</script>`;
+})();`;
+const SNIPPET = `\n<script src="/__dev/reload.js"></script>`;
 
 /** Directories that should never trigger a browser reload. */
 const IGNORED = /(^|[\\/\\\\])(node_modules|data|\.git|\.vscode)([\\/\\\\]|$)/;
@@ -50,6 +51,13 @@ export function attachDevReload(app, siteRoot) {
     console.warn('  ! live reload unavailable:', err.message);
     return;
   }
+
+  /* --- the client script (CSP-friendly, served not inlined) --- */
+  app.get('/__dev/reload.js', (req, res) => {
+    res.set('Content-Type', 'application/javascript; charset=utf-8');
+    res.set('Cache-Control', 'no-store');
+    res.send(RELOAD_JS);
+  });
 
   /* --- the SSE stream each page subscribes to --- */
   app.get('/__dev/reload', (req, res) => {
