@@ -10,6 +10,7 @@
 import { payments, providerName } from './payments/index.js';
 import { hashPassword, passwordProblem } from './auth.js';
 import { tx, one, run } from '../db/index.js';
+import { validate as validateCoupon, redeem as redeemCoupon, introCoupon } from './coupons.js';
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -33,7 +34,7 @@ function resolveUnit({ community, street, unit, zip }) {
 export async function enrol(input) {
   const {
     plan, firstName, lastName, email, phone, password,
-    street, unit, community, zip, startDate, outcome = 'success',
+    street, unit, community, zip, startDate, outcome = 'success', couponCode,
   } = input;
 
   /* ---- validate before anything is created or charged ---- */
@@ -57,8 +58,24 @@ export async function enrol(input) {
   const planRow = one(`SELECT * FROM plans WHERE code = ? AND active = 1`, plan);
   if (!planRow) return { ok: false, error: `No active plan named "${plan}".` };
 
-  const priceCents = planRow.price_cents;
   const passwordHash = await hashPassword(password);
+
+  // A pre-check only — it changes nothing. The real, race-safe check
+  // happens inside redeem() in transaction B, after payment succeeds.
+  // customerId is null here because no customer row exists yet.
+  let couponQuote = null;
+  if (couponCode) {
+    const check = validateCoupon({
+      code: couponCode, planId: planRow.id, customerId: null,
+      priceCents: planRow.price_cents,
+    });
+    if (check.ok) couponQuote = { coupon: check.coupon, quote: check.quote };
+  }
+
+  // The first charge is the promotional price when a valid intro code was
+  // quoted; locked_price_cents always stays the standard plan price - the
+  // rate this customer reverts to once the promotional term ends.
+  const priceCents = couponQuote ? couponQuote.quote.finalCents : planRow.price_cents;
 
   /* ---- transaction A: every record, nothing charged yet ---- */
   const ids = tx(() => {
@@ -76,11 +93,18 @@ export async function enrol(input) {
     run(`INSERT INTO service_addresses (customer_id, unit_id, start_date)
          VALUES (?, ?, ?)`, customerId, unitId, startDate || null);
 
+    // locked_price_cents is always the standard plan price - the rate this
+    // customer reverts to once any promotional term ends - never the
+    // promotional price, so a later plan-price change can never reach them.
     const subscriptionId = run(
       `INSERT INTO subscriptions (customer_id, plan_id, locked_price_cents,
+                                  promo_price_cents, promo_periods_remaining,
                                   status, provider, started_at)
-       VALUES (?, ?, ?, 'pending', ?, ?)`,
-      customerId, planRow.id, priceCents, providerName,
+       VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      customerId, planRow.id, planRow.price_cents,
+      couponQuote ? couponQuote.quote.finalCents : null,
+      couponQuote ? couponQuote.coupon.duration_periods : null,
+      providerName,
       startDate || new Date().toISOString().slice(0, 10)).lastInsertRowid;
 
     const paymentId = run(
@@ -122,10 +146,12 @@ export async function enrol(input) {
   } catch (err) {
     run(`UPDATE payments SET status = 'failed', failure_reason = ? WHERE id = ?`,
         payments.describeError(err), ids.paymentId);
-    return { ok: false, ...ids, status: 'failed', error: payments.describeError(err) };
+    return { ok: false, ...ids, status: 'failed', introApplied: false,
+             error: payments.describeError(err) };
   }
 
   /* ---- transaction B: record the outcome ---- */
+  let introApplied = false;
   tx(() => {
     run(`UPDATE payments SET status = ?, provider_payment_id = ?,
                              failure_reason = ?, paid_at = ?
@@ -142,10 +168,45 @@ export async function enrol(input) {
     }
   });
 
+  // Redemption happens only after a paid charge is committed, and only
+  // now - checking a code earlier changes nothing. redeem() opens its own
+  // transaction and re-checks the redemption limit inside it, so two
+  // simultaneous signups racing for the last spot cannot both win it; it
+  // must not be nested inside transaction B's own transaction.
+  if (charge.status === 'paid' && couponQuote) {
+    try {
+      redeemCoupon({
+        couponId: couponQuote.coupon.id,
+        customerId: ids.customerId,
+        subscriptionId: ids.subscriptionId,
+        paymentId: ids.paymentId,
+        priceCents: planRow.price_cents,
+        type: 'new',
+      });
+      run(`UPDATE customers SET is_intro = 1 WHERE id = ?`, ids.customerId);
+      introApplied = true;
+    } catch (err) {
+      if (err.code !== 'COUPON_LIMIT_REACHED') throw err;
+      // The spot was taken between validation and completion. The
+      // customer was already charged the promotional amount for this
+      // first period - that stands, they were quoted it - but no ongoing
+      // promotion was granted, so the frozen terms come off.
+      run(`UPDATE subscriptions SET promo_price_cents = NULL,
+                                    promo_periods_remaining = NULL
+            WHERE id = ?`, ids.subscriptionId);
+    }
+  }
+
+  // Informational only, read fresh after any redemption above - never used
+  // to decide anything for THIS signup, which was already decided.
+  const launch = introCoupon();
+
   return {
     ok: charge.status === 'paid',
     ...ids,
     status: charge.status,
+    introApplied,
+    remainingSpots: launch ? launch.remaining : null,
     error: charge.status === 'paid' ? undefined
       : charge.failureReason || 'The payment did not complete.',
   };
