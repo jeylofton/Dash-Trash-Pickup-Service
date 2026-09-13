@@ -51,18 +51,50 @@ export async function enrol(input) {
   const pwProblem = passwordProblem(password);
   if (pwProblem) return { ok: false, error: pwProblem };
 
-  // An existing row for this email only blocks a new signup when it
-  // belongs to a real customer - one with at least one paid payment. A row
-  // left behind by an attempt that never charged anyone (declined, failed,
-  // or abandoned mid-flow) is a shell, not a customer, and must not burn
-  // the email address forever.
+  // DESTRUCTIVE PATH, REACHABLE BY ANONYMOUS REQUESTS. Reusing an email
+  // means DELETING the row that holds it, and users cascades to sessions,
+  // employees and customers (schema.sql). POST /api/checkout is public and
+  // unauthenticated, so anyone who can guess an email could otherwise
+  // destroy the account behind it. Reuse is therefore allowed ONLY when the
+  // existing row is unambiguously an abandoned customer shell: every
+  // condition below must hold, and any doubt returns the duplicate error
+  // and deletes nothing.
   let staleUserId = null;
   const existingUser = one(`SELECT id FROM users WHERE email = ?`, email);
   if (existingUser) {
-    const hasPaid = one(
-      `SELECT 1 FROM payments p JOIN customers c ON c.id = p.customer_id
-        WHERE c.user_id = ? AND p.status = 'paid' LIMIT 1`, existingUser.id);
-    if (hasPaid) {
+    const reusableShell = one(
+      `SELECT 1
+         FROM users u
+         -- (2) a customers row must exist: a user with no customer row is
+         --     staff or a half-created account, never an abandoned signup.
+         JOIN customers c ON c.user_id = u.id
+        WHERE u.id = ?
+          -- (1) never touch an admin or employee row, whatever else is
+          --     true - deleting one would take their employees row and
+          --     every session with it.
+          AND u.role = 'customer'
+          -- (3) no payment that represents money taken, owed, returned, or
+          --     still in flight. 'pending' counts: a charge that may yet
+          --     clear must not be discarded. Only 'failed'/'cancelled'
+          --     payments (or none at all) mark a shell.
+          AND NOT EXISTS (
+            SELECT 1 FROM payments p
+             WHERE p.customer_id = c.id
+               AND p.status IN ('paid', 'pending', 'refunded', 'past_due'))
+          -- (4) no live subscription. A subscription that is active,
+          --     past_due or paused means a real, serviced customer no
+          --     matter what the payment rows say. 'pending' is excluded
+          --     because that is exactly the state transaction A leaves
+          --     behind on a signup whose charge never succeeded - the
+          --     shell this path exists to clear - and 'cancelled' is a
+          --     closed account.
+          AND NOT EXISTS (
+            SELECT 1 FROM subscriptions s
+             WHERE s.customer_id = c.id
+               AND s.status NOT IN ('cancelled', 'pending'))
+        LIMIT 1`, existingUser.id);
+
+    if (!reusableShell) {
       return { ok: false, error: 'An account already exists for that email address.' };
     }
     staleUserId = existingUser.id;
@@ -133,8 +165,14 @@ export async function enrol(input) {
        VALUES (?, ?, 'customer', ?, ?, ?)`,
       email, passwordHash, firstName, lastName, phone).lastInsertRowid;
 
+    // 'paused', not the column default 'active': nothing has been charged
+    // yet at this point. An 'active' customer is counted in the admin
+    // overview and picked up by unitsForRoute() in schedule.js, which would
+    // put a signup whose charge later fails or never settles onto a real
+    // pickup route. Transaction B promotes this to 'active' only once the
+    // charge comes back 'paid'.
     const customerId = run(
-      `INSERT INTO customers (user_id, provider) VALUES (?, ?)`,
+      `INSERT INTO customers (user_id, provider, status) VALUES (?, ?, 'paused')`,
       userId, providerName).lastInsertRowid;
 
     run(`INSERT INTO service_addresses (customer_id, unit_id, start_date)
@@ -223,6 +261,12 @@ export async function enrol(input) {
       next.setMonth(next.getMonth() + planRow.interval_months);
       run(`UPDATE subscriptions SET status = 'active', next_billing_date = ?
             WHERE id = ?`, next.toISOString().slice(0, 10), ids.subscriptionId);
+
+      // Only a paid charge makes this a serviceable customer - this is the
+      // one place customers.status becomes 'active', so an unpaid signup is
+      // never counted or routed. Written inside transaction B with the
+      // payment outcome so the two can never disagree.
+      run(`UPDATE customers SET status = 'active' WHERE id = ?`, ids.customerId);
 
       if (couponQuote) {
         try {
