@@ -5,7 +5,7 @@
    Contents
      1. CONFIG  <-- change pricing, the intro offer, and the schedule HERE
      2. Derived pricing helpers
-     3. Backend (Square) + Web Payments SDK
+     3. Backend (demo payments only - no card data is ever collected)
      4. Render: prices, schedule, spots remaining
      5. Introductory offer modal
      6. Signup flow (plan -> info -> address -> availability -> payment -> done)
@@ -30,8 +30,9 @@
       totalSpots: 100,
       label: 'Introductory Rate',
       // How long the introductory price lasts before the standard monthly
-      // rate takes over. Square bills this as a two-phase plan, so this
-      // number MUST match the intro phase in server/bin/square-setup.js.
+      // rate takes over. This number MUST match the intro phase billed by
+      // the server (server/lib/signup.js), so the disclosed term is never
+      // out of sync with what the customer is actually charged.
       termMonths: 12,
       // How long before the popup appears, and how often a visitor sees it.
       popupDelayMs: 1400,
@@ -57,12 +58,11 @@
     },
 
     /* ---- Payment backend ----
-       Where the Square server lives. Leave as '' when the API is served from
+       Where the API server lives. Leave as '' when the API is served from
        the same origin as this page. If the API runs elsewhere, put its base
        URL here (and add this site's origin to ALLOWED_ORIGINS in server/.env).
 
-       If the server is unreachable, the site falls back to demo mode: the
-       signup flow still works end to end but nothing is charged. */
+       The server is demo-only: it never collects or stores real card data. */
     api: {
       // '' means "same origin as this page" - correct once the site and the
       // API are deployed together. During local development the site is on
@@ -126,17 +126,16 @@
   };
 
   /* ============================================================
-     3. Backend (Square) - with demo fallback
+     3. Backend (demo payments only)
 
-     Every call goes through api(). If the server is not reachable,
-     DEMO_MODE flips on and the flow still completes without charging.
+     Every call goes through api(). The checkout endpoint never accepts or
+     stores card data - it takes a simulated `outcome` instead, so there is
+     no real vs. demo mode to fall back between.
      ============================================================ */
 
   const isLocalDev = ['localhost', '127.0.0.1'].includes(location.hostname)
     && location.port !== new URL(CONFIG.api.localDevUrl).port;
   const API = (isLocalDev ? CONFIG.api.localDevUrl : CONFIG.api.baseUrl).replace(/\/$/, '');
-  let DEMO_MODE = !CONFIG.api.enabled;
-  let squareConfig = null;   // { applicationId, locationId, environment }
 
   async function api(path, options = {}) {
     const res = await fetch(`${API}${path}`, {
@@ -153,27 +152,7 @@
     return data;
   }
 
-  /** Ask the server for the publishable Square IDs. Failure => demo mode. */
-  async function loadSquareConfig() {
-    if (!CONFIG.api.enabled) return null;
-    try {
-      const cfg = await api('/api/config');
-      if (!cfg.applicationId || !cfg.locationId) throw new Error('Square not configured');
-      squareConfig = cfg;
-      DEMO_MODE = false;
-      return cfg;
-    } catch (err) {
-      console.warn('[Dash] Payment server unavailable - running in demo mode.', err.message);
-      DEMO_MODE = true;
-      return null;
-    }
-  }
-
   async function fetchIntroSpots() {
-    /* Always ask the server. DEMO_MODE means the PAYMENT PROVIDER is not
-       configured, which says nothing about whether the API is reachable —
-       reading the real spot count here keeps the page and the server from
-       reporting different numbers. Falls back only if the request fails. */
     if (CONFIG.api.enabled) {
       try { return await api('/api/intro-spots'); }
       catch (err) { console.warn('[Dash] spot count unavailable, using demo count.', err.message); }
@@ -188,91 +167,6 @@
       catch (err) { console.warn('[Dash] area check failed', err.message); }
     }
     return { available: CONFIG.serviceArea.zips.includes(String(zip).trim()) };
-  }
-
-  /**
-   * Completes the signup.
-   * `sourceId` is Square's single-use card token, produced in the browser by
-   * the Web Payments SDK. A raw card number never passes through this function.
-   */
-  async function submitSignup(data, sourceId) {
-    if (DEMO_MODE) {
-      const spots = await fetchIntroSpots();
-      const introApplied = data.plan === 'Introductory' && spots.claimed < CONFIG.intro.totalSpots;
-      if (introApplied) {
-        localStorage.setItem('dtp_demo_signups',
-          String(Number(localStorage.getItem('dtp_demo_signups') || 0) + 1));
-      }
-      return { ok: true, confirmationId: 'DEMO-' + Math.random().toString(36).slice(2, 8).toUpperCase(), introApplied, demo: true };
-    }
-    return api('/api/checkout', {
-      method: 'POST',
-      body: JSON.stringify({ ...data, sourceId }),
-    });
-  }
-
-  /* ---------- Square Web Payments SDK ---------- */
-  let squareCard = null;      // the mounted card element
-  let squareCardReady = false;
-
-  /** Point the SDK <script> at the right CDN for this environment, then load it. */
-  function loadSquareSdk(environment) {
-    const tag = document.getElementById('squareSdk');
-    if (!tag) return Promise.reject(new Error('Square SDK script tag missing'));
-
-    const wanted = environment === 'production'
-      ? tag.dataset.productionSrc
-      : tag.dataset.sandboxSrc;
-
-    if (window.Square && tag.src === wanted) return Promise.resolve();
-
-    return new Promise((resolve, reject) => {
-      const fresh = document.createElement('script');
-      fresh.src = wanted;
-      fresh.onload = resolve;
-      fresh.onerror = () => reject(new Error('Could not load the Square SDK'));
-      tag.replaceWith(fresh);
-      fresh.id = 'squareSdk';
-      fresh.dataset.sandboxSrc = tag.dataset.sandboxSrc;
-      fresh.dataset.productionSrc = tag.dataset.productionSrc;
-    });
-  }
-
-  /** Mount Square's card iframe into #card-container. Safe to call repeatedly. */
-  async function mountSquareCard() {
-    if (DEMO_MODE || squareCardReady || !squareConfig) return;
-    const container = $('[data-card-container]');
-    if (!container) return;
-
-    try {
-      await loadSquareSdk(squareConfig.environment);
-      const payments = window.Square.payments(squareConfig.applicationId, squareConfig.locationId);
-      squareCard = await payments.card({
-        style: {
-          input: { fontSize: '15px', color: '#171a1f' },
-          '.input-container': { borderColor: '#d7d2cb', borderRadius: '13px' },
-          '.input-container.is-focus': { borderColor: '#f1541f' },
-          '.input-container.is-error': { borderColor: '#b3261e' },
-          '.message-text.is-error': { color: '#b3261e' },
-        },
-      });
-      await squareCard.attach('#card-container');
-      squareCardReady = true;
-    } catch (err) {
-      console.error('[Dash] Square card failed to mount', err);
-      showPaymentError('Could not load the secure card form. Please refresh and try again.');
-    }
-  }
-
-  /** Turn the entered card into a single-use token. */
-  async function tokenizeCard() {
-    if (!squareCardReady || !squareCard) throw new Error('The card form is not ready yet.');
-    const result = await squareCard.tokenize();
-    if (result.status !== 'OK') {
-      const detail = result.errors?.[0]?.message || 'Please check your card details.';
-      throw new Error(detail);
-    }
-    return result.token;
   }
 
   function showPaymentError(message) {
@@ -333,7 +227,7 @@
 
     /* The introductory rate is a TERM, not a permanent price. These two hooks
        disclose that everywhere the offer appears. Both read from CONFIG, so
-       the page can never advertise a term Square is not actually billing. */
+       the page can never advertise a term the server is not actually billing. */
     $$('[data-intro-term]').forEach(el => { el.textContent = String(CONFIG.intro.termMonths); });
     $$('[data-intro-after]').forEach(el => { el.textContent = money(PRICING.intro.after); });
   }
@@ -532,28 +426,25 @@
     }
 
     showPaymentError('');
-    const demoNote = $('[data-payment-demo]');
-    const cardField = $('.card-field');
-    if (demoNote) demoNote.hidden = !DEMO_MODE;
-    if (cardField) cardField.hidden = DEMO_MODE;
-    mountSquareCard();
   }
 
   async function completeSignup() {
     const v = values();
     const next = $('[data-step-next]');
     next.disabled = true;
+    next.textContent = 'Submitting…';
     showPaymentError('');
+
+    // No card data is ever collected - the visitor picks which result to
+    // simulate, and that choice is all the server needs from this step.
+    const outcome = document.querySelector('input[name="outcome"]:checked')?.value || 'success';
 
     let res;
     try {
-      let sourceId = null;
-      if (!DEMO_MODE) {
-        next.textContent = 'Verifying card…';
-        sourceId = await tokenizeCard();
-      }
-      next.textContent = 'Submitting…';
-      res = await submitSignup(v, sourceId);
+      res = await api('/api/checkout', {
+        method: 'POST',
+        body: JSON.stringify({ ...v, outcome }),
+      });
     } catch (err) {
       next.disabled = false;
       next.textContent = 'Complete signup';
@@ -569,17 +460,25 @@
     }
 
     next.disabled = false;
-    if (!res || !res.ok) { next.textContent = 'Complete signup'; return; }
+    if (!res || !res.ok) {
+      next.textContent = 'Complete signup';
+      showPaymentError(res?.error || 'Something went wrong. Please try again.');
+      return;
+    }
 
     await renderSpots();
 
-    $('[data-confirm-heading]').textContent = res.introApplied
+    const planKey = PLAN_KEY[v.plan];
+    const introApplied = planKey === 'intro';
+
+    $('[data-confirm-heading]').textContent = introApplied
       ? 'Your introductory rate is locked in'
       : 'Service request received';
-    const demoSuffix = res.demo ? ' (demo — no payment was processed)' : '';
-    $('[data-confirm-body]').textContent = res.introApplied
-      ? `Confirmation ${res.confirmationId}. You're one of the first ${CONFIG.intro.totalSpots} customers at ${money(CONFIG.intro.price)}/month. Standard pickup is ${scheduleDays()}.${demoSuffix}`
-      : `Confirmation ${res.confirmationId}. We'll email ${v.email || 'you'} with your pickup schedule. Standard pickup is ${scheduleDays()}.${demoSuffix}`;
+    const badge = $('[data-confirm-badge]');
+    if (badge) badge.hidden = !res.demo;
+    $('[data-confirm-body]').textContent = introApplied
+      ? `Confirmation ${res.confirmationId}. You're one of the first ${CONFIG.intro.totalSpots} customers at ${money(CONFIG.intro.price)}/month. Standard pickup is ${scheduleDays()}.`
+      : `Confirmation ${res.confirmationId}. We'll email ${v.email || 'you'} with your pickup schedule. Standard pickup is ${scheduleDays()}.`;
 
     showStep(LAST_STEP);
   }
@@ -678,7 +577,6 @@
   renderSchedule();
   renderPricing();
   (async () => {
-    await loadSquareConfig();     // decides live vs demo mode
     await renderSpots();
     if (shouldShowPromo()) setTimeout(openPromo, CONFIG.intro.popupDelayMs);
   })();

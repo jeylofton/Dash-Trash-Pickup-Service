@@ -41,10 +41,6 @@
   }
   </script>
   <link rel="stylesheet" href="styles.css" />
-  <script id="squareSdk"
-          src="https://sandbox.web.squarecdn.com/v1/square.js"
-          data-sandbox-src="https://sandbox.web.squarecdn.com/v1/square.js"
-          data-production-src="https://web.squarecdn.com/v1/square.js"></script>
   <script src="scripts.js" defer></script>
 </head>
 <body>
@@ -409,6 +405,11 @@
                 <div class="field"><label for="firstName">First name</label><input id="firstName" name="firstName" required placeholder="Jordan" autocomplete="given-name" /></div>
                 <div class="field"><label for="lastName">Last name</label><input id="lastName" name="lastName" required placeholder="Taylor" autocomplete="family-name" /></div>
                 <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required placeholder="you@example.com" autocomplete="email" /></div>
+                <label class="field">
+                  <span>Choose a password</span>
+                  <input type="password" name="password" required minlength="10"
+                         autocomplete="new-password" placeholder="At least 10 characters" />
+                </label>
                 <div class="field"><label for="phone">Phone</label><input id="phone" name="phone" type="tel" required placeholder="(706) 555-0000" autocomplete="tel" /></div>
               </div>
               <p class="field-error" data-error-for="step2" hidden>Please complete the required fields above.</p>
@@ -451,22 +452,20 @@
                 <p class="payment-total">Due today: <strong data-review="total">&mdash;</strong></p>
                 <p class="payment-plan" data-review="planSummary"></p>
                 <p class="payment-renewal" data-review="renewal"></p>
-                <!-- Square renders its card inputs inside this element as a secure
-                     iframe. Card numbers go straight to Square, never to this page. -->
-                <div class="card-field">
-                  <label class="card-field-label" for="card-container">Card details</label>
-                  <div id="card-container" data-card-container></div>
-                  <p class="card-field-error" data-payment-error hidden></p>
-                  <p class="card-field-secure">
-                    <span aria-hidden="true">&#128274;</span>
-                    Card details are encrypted by Square and never stored on this site.
-                  </p>
+                <div class="demo-banner" role="status">
+                  <strong>Demo Mode &ndash; No Real Payment Will Be Processed.</strong>
+                  <span>No card details are collected. Choose a result to simulate.</span>
                 </div>
 
-                <div class="payment-placeholder" data-payment-demo hidden>
-                  <strong>Demo mode &mdash; payment server not connected</strong>
-                  <span>Start the Square backend (<code>cd server &amp;&amp; npm start</code>) to take real sandbox payments. Until then, signup completes without charging anything.</span>
-                </div>
+                <fieldset class="outcome-grid">
+                  <legend>Simulate a payment result</legend>
+                  <label><input type="radio" name="outcome" value="success" checked> Successful payment</label>
+                  <label><input type="radio" name="outcome" value="failed"> Failed payment</label>
+                  <label><input type="radio" name="outcome" value="declined"> Declined payment</label>
+                  <label><input type="radio" name="outcome" value="pending"> Pending payment</label>
+                </fieldset>
+
+                <p class="card-field-error" data-payment-error hidden></p>
               </div>
             </fieldset>
 
@@ -475,9 +474,10 @@
               <legend class="step-legend">You&rsquo;re all set</legend>
               <div class="confirmation">
                 <div class="confirmation-mark" aria-hidden="true">✓</div>
+                <span class="demo-flag" data-confirm-badge hidden>DEMO</span>
                 <h4 data-confirm-heading>Service request received</h4>
                 <p data-confirm-body></p>
-                <p class="confirmation-note">Demo confirmation. Connect this step to your backend to send a real confirmation email and create the customer record.</p>
+                <p class="confirmation-note">Demo confirmation &mdash; no real payment was processed.</p>
               </div>
             </fieldset>
 

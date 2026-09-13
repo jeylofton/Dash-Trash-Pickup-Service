@@ -566,13 +566,28 @@ footer { background: #111418; color: #aab2ba; padding: 42px 0; }
 .payment-total { margin: 0; font-size: 1.15rem; }
 .payment-total strong { color: var(--orange-dark); font-size: 1.6rem; }
 .payment-plan { margin: 0; color: var(--muted); font-size: .92rem; }
-.payment-placeholder {
-  display: grid; gap: 6px;
-  padding: 20px; border-radius: 14px;
-  border: 2px dashed var(--line); background: #fdfcfa;
+
+/* Demo checkout: no payment provider is wired up, so the payment step asks
+   the visitor which outcome to simulate instead of collecting a real card. */
+.demo-banner {
+  display: grid; gap: 4px;
+  padding: 16px 18px; border-radius: 14px;
+  border: 2px dashed var(--orange); background: rgba(241,84,31,.06);
 }
-.payment-placeholder strong { font-size: .95rem; }
-.payment-placeholder span { color: var(--muted); font-size: .88rem; line-height: 1.5; }
+.demo-banner strong { font-size: .95rem; color: var(--orange-dark); }
+.demo-banner span { color: var(--muted); font-size: .88rem; line-height: 1.5; }
+
+.outcome-grid {
+  display: grid; gap: 10px;
+  padding: 16px 18px; border-radius: 14px; border: 1px solid var(--line);
+  margin: 0;
+}
+.outcome-grid legend { font-size: .87rem; font-weight: 800; padding: 0 4px; }
+.outcome-grid label {
+  display: flex; align-items: center; gap: 9px;
+  font-size: .92rem; cursor: pointer;
+}
+.card-field-error { color: #b3261e; font-size: .86rem; font-weight: 700; margin: 0; }
 
 .confirmation { text-align: center; padding: 12px 0 4px; }
 .confirmation-mark {
@@ -581,19 +596,16 @@ footer { background: #111418; color: #aab2ba; padding: 42px 0; }
   background: rgba(46,111,85,.12); color: var(--success);
   font-size: 1.7rem; font-weight: 900;
 }
+.demo-flag {
+  display: inline-block; margin: 0 0 8px;
+  padding: 3px 10px; border-radius: 999px;
+  background: var(--orange); color: var(--white);
+  font-size: .72rem; font-weight: 800; letter-spacing: .04em;
+}
 .confirmation h4 { font-size: 1.3rem; margin: 0 0 10px; }
 .confirmation p { color: var(--muted); margin: 0 0 10px; }
 .confirmation-note { font-size: .78rem; }
 
-/* Square card field (the inputs themselves live in Square's iframe) */
-.card-field { display: grid; gap: 8px; }
-.card-field-label { font-size: .87rem; font-weight: 800; }
-#card-container { min-height: 62px; }
-.card-field-error { color: #b3261e; font-size: .86rem; font-weight: 700; margin: 0; }
-.card-field-secure {
-  display: flex; align-items: center; gap: 7px;
-  margin: 0; color: var(--muted); font-size: .78rem;
-}
 .payment-renewal {
   margin: 0; padding: 11px 13px; border-radius: 11px;
   background: rgba(241,84,31,.07); color: var(--orange-dark);
