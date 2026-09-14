@@ -2203,7 +2203,7 @@ function showPlan(id) {
       ${p.customers} customer(s) · ${p.customerAvailable ? 'available to customers' : 'not customer-available'} ·
       code ${esc(p.code)}</p>
     ${p.description ? `<p class="small">${esc(p.description)}</p>` : ''}
-    <div class="form-actions-bar">
+    <div class="form-actions-bar" style="margin-bottom:14px">
       <button class="btn btn-primary" id="planEditBtn">Edit details</button>
       <button class="btn" id="planDupBtn">Duplicate</button>
     </div>
