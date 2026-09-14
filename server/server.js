@@ -18,6 +18,8 @@ import { enrol } from './lib/signup.js';
 import { payments, providerName } from './lib/payments/index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
 import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
+import { migratePlans } from './db/migrate_plans.js';
+import { applyDuePriceChanges } from './lib/plans.js';
 import { seedFreshInstall } from './db/seed.js';
 import { introCoupon } from './lib/coupons.js';
 import { attachUser, requirePasswordCurrent } from './lib/rbac.js';
@@ -35,6 +37,7 @@ import { router as discountRouter } from './routes/discounts.js';
 import { router as communityRouter, publicCommunityRoutes } from './routes/communities.js';
 import { router as rolesRouter } from './routes/roles.js';
 import { router as settingsRouter } from './routes/settings.js';
+import { router as plansRouter } from './routes/plans.js';
 import { publicBranding } from './lib/branding.js';
 import { attachDevReload, DEV_RELOAD_SNIPPET } from './lib/devreload.js';
 import { attachBrandedHtml } from './lib/htmlserve.js';
@@ -227,6 +230,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SITE_ROOT = join(HERE, 'public');
 
 app.use('/api/auth', authRouter);
+app.use('/api/admin/plans', plansRouter); // subscription plans; per-permission inside. MUST precede /api/admin (prefix match)
 app.use('/api/admin', adminRouter);
 app.use('/api/employee', employeeRouter);
 app.use('/api/customer', customerRouter);
@@ -332,9 +336,13 @@ app.use((err, req, res, next) => {
 migrate();
 const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes(),
                       ...migrateAdminControls(), ...migrateDynamicRoles(),
-                      ...migrateCommunityLifecycle()];
+                      ...migrateCommunityLifecycle(), ...migratePlans()];
 if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
 migrateDemoFlags();   // after the admin rebuilds, so is_demo columns survive
+
+// Apply any subscription-plan price changes whose effective date has arrived.
+// Idempotent and cheap; also runs lazily on plan reads.
+applyDuePriceChanges();
 
 /* Start the HTTP listener whenever this module is loaded to RUN the app -
    whether it is executed directly (`node server.js`) or imported by a host's
