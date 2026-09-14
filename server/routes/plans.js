@@ -51,7 +51,11 @@ function validIntervals(body) {
 /* ---- list ---- */
 router.get('/', requirePermission('plans.view'), (req, res) => {
   applyDuePriceChanges();
-  const rows = all(`SELECT * FROM plans WHERE status != 'archived' OR ?1 = 1
+  // Plain anonymous `?` bound positionally — portable across every node:sqlite
+  // version. A numbered `?1` threw "column index out of range" on the host's
+  // (older) Node build, 500-ing this route in production while localhost (newer
+  // Node) tolerated it.
+  const rows = all(`SELECT * FROM plans WHERE status != 'archived' OR ? = 1
                      ORDER BY display_order, id`,
                    req.query.includeArchived ? 1 : 0);
   res.json({ plans: rows.map(shape) });
