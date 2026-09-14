@@ -25,6 +25,7 @@
 import { db, migrate, one, run, tx, migrateDemoFlags } from './index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './migrate_admin.js';
 import { migrateCommunityLifecycle } from './migrate_lifecycle.js';
+import { migratePlans } from './migrate_plans.js';
 import { hashPasswordSync } from '../lib/auth.js';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -54,7 +55,7 @@ export function seedFreshInstall({ reset = false } = {}) {
       'pay_periods', 'payments', 'subscriptions', 'coupon_redemptions', 'service_credits',
       'service_addresses', 'units', 'buildings', 'communities', 'customer_notes',
       'employee_notes', 'audit_log', 'sessions', 'customers', 'employees', 'users',
-      'coupons', 'plans'];
+      'coupons', 'plan_price_changes', 'plans'];
     db.exec('PRAGMA foreign_keys = OFF');
     for (const t of tables) { try { db.exec(`DELETE FROM ${t}`); } catch {} }
     db.exec(`DELETE FROM sqlite_sequence`);
@@ -77,16 +78,25 @@ export function seedFreshInstall({ reset = false } = {}) {
 
   tx(() => {
   /* ---------- reference data (real, shared configuration) ---------- */
+  // [code, name, interval_unit, interval_count, price_cents, status, customer_available, display_order, is_intro]
   const plans = [
-    ['Introductory', 'Introductory Rate', 1, 1800, 1],
-    ['Monthly', 'Monthly', 1, 2800, 0],
-    ['Quarterly', 'Quarterly', 3, 7400, 0],
-    ['Annual', 'Annual', 12, 27600, 0],
+    ['Weekly',       'Weekly',            'week',  1,   800, 'active',   1, 1, 0],
+    ['Monthly',      'Monthly',           'month', 1,  2800, 'active',   1, 2, 0],
+    ['Quarterly',    'Quarterly',         'month', 3,  7400, 'active',   1, 3, 0],
+    ['BiAnnual',     'Bi-Annual',         'month', 6, 15500, 'active',   1, 4, 0],
+    ['Annual',       'Annual',            'year',  1, 27600, 'active',   1, 5, 0],
+    // The Introductory rate is a promotion on Monthly, not a selectable plan.
+    // The row is kept for the launch coupon and old subscriptions' FKs, but is
+    // never active or customer-available.
+    ['Introductory', 'Introductory Rate', 'month', 1,  1800, 'inactive', 0, 6, 1],
   ];
   const planId = {};
-  for (const [code, name, months, cents, intro] of plans) {
-    planId[code] = run(`INSERT INTO plans (code, name, interval_months, price_cents, is_intro)
-                        VALUES (?, ?, ?, ?, ?)`, code, name, months, cents, intro).lastInsertRowid;
+  for (const [code, name, unit, count, cents, status, avail, order, intro] of plans) {
+    planId[code] = run(
+      `INSERT INTO plans (code, name, interval_unit, interval_count, price_cents,
+                          status, customer_available, display_order, is_intro, provider_plan_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'demo')`,
+      code, name, unit, count, cents, status, avail, order, intro).lastInsertRowid;
   }
   // The launch promotion (100 spots) so the public intro offer works. 0 used.
   run(`INSERT INTO coupons (code, name, discount_type, discount_value, max_redemptions,
@@ -188,7 +198,7 @@ if (isDirectRun) {
   // a standalone run against an empty file has its tables before seeding.
   migrate();
   migrateAdmin(); migrateCommunities(); migrateIssueCodes(); migrateAdminControls(); migrateDynamicRoles();
-  migrateCommunityLifecycle();
+  migrateCommunityLifecycle(); migratePlans();
   migrateDemoFlags();
 
   const seeded = seedFreshInstall({ reset: process.argv.includes('--reset') });
