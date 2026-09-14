@@ -35,6 +35,7 @@
     <button data-tab="expenses">Expenses</button>
     <button data-tab="payroll">Payroll</button>
     <button data-tab="coupons">Coupons</button>
+    <button data-tab="plans" data-perm="plans.view" hidden>Subscription Plans</button>
     <button data-tab="credits">Service Credits</button>
     <button data-tab="reports">Reports</button>
     <button data-tab="settings" data-perm="system.settings.view" hidden>System Settings</button>
@@ -60,7 +61,7 @@
         <div><label for="custStatus">Status</label>
           <select id="custStatus"><option value="">All</option><option>active</option><option>paused</option><option>cancelled</option></select></div>
         <div><label for="custPlan">Plan</label>
-          <select id="custPlan"><option value="">All</option><option>Introductory</option><option>Monthly</option><option>Quarterly</option><option>Annual</option></select></div>
+          <select id="custPlan"><option value="">All</option></select></div>
       </div>
       <div class="card"><div class="table-wrap"><table id="custTable"></table></div></div>
     </section>
@@ -349,6 +350,59 @@
         <h2>Employee performance</h2>
         <div class="table-wrap"><table id="perfTable"></table></div>
       </div>
+    </section>
+
+    <section data-panel="plans" hidden>
+      <h1>Subscription Plans</h1>
+      <p class="muted small" style="margin-top:-8px">The plans customers can subscribe to. Set any
+        billing frequency, price, and availability. Editing a price affects new customers immediately;
+        existing customers keep their price until an effective-dated change you schedule.</p>
+
+      <div class="card" id="newPlanCard" hidden>
+        <h3 id="planFormTitle">New plan</h3>
+        <div class="row">
+          <div><label for="pfName">Plan name</label><input id="pfName" placeholder="Standard Monthly" /></div>
+          <div><label for="pfPrice">Price ($)</label><input id="pfPrice" type="number" step="0.01" min="0" placeholder="30.00" /></div>
+        </div>
+        <div class="row">
+          <div><label for="pfCount">Bills every</label>
+            <span style="display:inline-flex;gap:6px;align-items:center">
+              <input id="pfCount" type="number" min="1" value="1" style="width:4.5rem" />
+              <select id="pfUnit">
+                <option value="week">week(s)</option>
+                <option value="month" selected>month(s)</option>
+                <option value="year">year(s)</option>
+              </select></span></div>
+          <div><label for="pfAvail">Available to customers</label>
+            <select id="pfAvail"><option value="0">No</option><option value="1">Yes</option></select></div>
+          <div><label for="pfStatus">Status</label>
+            <select id="pfStatus">
+              <option value="draft">Draft</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select></div>
+          <div><label for="pfOrder">Display order</label><input id="pfOrder" type="number" placeholder="auto" /></div>
+        </div>
+        <div class="row">
+          <div><label for="pfLabel">Label (optional)</label><input id="pfLabel" placeholder="Most Popular" /></div>
+          <div style="flex:2"><label for="pfDesc">Description (shown to customers)</label><input id="pfDesc" placeholder="Two doorstep pickups per week." /></div>
+        </div>
+        <div class="row">
+          <div style="flex:1"><label for="pfNotes">Internal notes (admin only)</label><input id="pfNotes" /></div>
+        </div>
+        <p class="msg" id="pfMsg" hidden></p>
+        <div class="form-actions-bar">
+          <button class="btn btn-primary" id="pfSave">Save plan</button>
+          <button class="btn" id="pfCancel">Cancel</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <button class="btn btn-primary" id="planNew">New plan</button>
+        <div class="table-wrap" style="margin-top:12px"><table id="planTable"></table></div>
+      </div>
+
+      <div class="card" id="planDetail" hidden></div>
     </section>
 
     <section data-panel="coupons" hidden>

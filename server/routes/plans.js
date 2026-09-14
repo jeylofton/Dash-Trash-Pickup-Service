@@ -133,8 +133,16 @@ router.delete('/:id', requirePermission('plans.archive'), (req, res) => {
 router.get('/:id/actions', requirePermission('plans.view'), (req, res) => {
   const p = one(`SELECT * FROM plans WHERE id = ?`, req.params.id);
   if (!p) return res.status(404).json({ error: 'Not found.' });
-  res.json({ status: p.status, actions: availableActions(PLAN_LIFECYCLE, p),
-             deletion: planDeletability(p.id) });
+  // Shape matches what the shared lifecycleControl UI expects: a status
+  // OBJECT (label/tone/description), a name for delete confirmation, and a
+  // deletion URL for the DELETE request.
+  const meta = PLAN_STATUSES[p.status] ?? { label: p.status, tone: '' };
+  res.json({
+    name: p.name,
+    status: { key: p.status, ...meta },
+    actions: availableActions(PLAN_LIFECYCLE, p),
+    deletion: { ...planDeletability(p.id), url: `/api/admin/plans/${p.id}` },
+  });
 });
 
 router.post('/:id/action', requirePermission('plans.status', 'plans.archive'), (req, res) => {
