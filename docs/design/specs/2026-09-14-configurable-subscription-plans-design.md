@@ -1,0 +1,251 @@
+# Configurable Subscription Plans — Design
+
+**Date:** 2026-09-14
+**Branch:** `feature-subscription-plans`
+**Status:** Approved design, pending implementation plan
+
+## Purpose
+
+Let the business owner/admin define their own customer subscription model —
+plan names, prices, and **any** billing frequency (weekly, biweekly, monthly,
+quarterly, bi-annual, annual, or a custom "every N weeks/months") — from the
+dashboard, without touching source code. The software must not assume one fixed
+billing structure (Monthly / Quarterly / Annual).
+
+## What already exists (and is reused)
+
+- A `plans` table (`code`, `name`, `interval_months`, `price_cents`, `is_intro`,
+  `active`), plus `subscriptions.locked_price_cents`, `coupon_plans`, and
+  `payments`. Prices already lock per-subscription at signup, so plan edits never
+  re-price existing customers — section 10's requirement is already satisfied.
+- A data-driven single-action lifecycle engine (`lib/lifecycle.js`,
+  demonstrated by `lib/community_lifecycle.js`).
+- A granular permission catalog (`permissions` + `role_permissions`) and
+  `requirePermission()` middleware (`lib/permissions.js`).
+- The dashboard page-state pattern: list → select/manage → edit → save/cancel →
+  return to list with nothing selected.
+- Demo-only payments (`lib/payments/*`); the DB owns billing.
+- A migration mechanism in `db/index.js` (`migrate()` with a guarded
+  `addColumn` helper; table rebuilds are already done in `migrate_admin.js`).
+
+## The gap
+
+Billing is stored as a whole `interval_months` integer, so **weekly/biweekly is
+impossible**, and `interval_months` is wired into MRR math
+(`routes/admin.js`), next-billing-date computation (`lib/signup.js`,
+`routes/customer.js`), and customer displays. This is the central thing to fix.
+
+## Design
+
+### 1. Data model — rebuild `plans`
+
+Rebuild the `plans` table (inside a guarded, idempotent migration, preserving the
+foreign keys from `subscriptions.plan_id` and `coupon_plans.plan_id`) so the
+canonical billing interval is `interval_unit` + `interval_count`:
+
+| column | type | notes |
+|---|---|---|
+| `id` | INTEGER PK | unchanged |
+| `code` | TEXT UNIQUE NOT NULL | kept; auto-slugged from name on create, uniqueness enforced |
+| `name` | TEXT NOT NULL | e.g. "Standard Monthly" |
+| `description` | TEXT | customer-facing blurb |
+| `internal_notes` | TEXT | admin-only |
+| `price_cents` | INTEGER NOT NULL | admin controls it; never auto-calculated |
+| `currency` | TEXT NOT NULL DEFAULT 'USD' | |
+| `interval_unit` | TEXT NOT NULL CHECK IN ('day','week','month','year') | |
+| `interval_count` | INTEGER NOT NULL CHECK (> 0) | "every N units" |
+| `customer_available` | INTEGER NOT NULL DEFAULT 0 | section 6 |
+| `status` | TEXT NOT NULL DEFAULT 'draft' CHECK IN ('draft','active','inactive','archived') | replaces `active` boolean |
+| `display_order` | INTEGER NOT NULL DEFAULT 0 | section 7 |
+| `label` | TEXT | optional; "Most Popular", "Best Value", … (section 8, not hard-coded) |
+| `is_intro` | INTEGER NOT NULL DEFAULT 0 | kept (launch-promotion marker) |
+| `provider_plan_id` | TEXT | kept |
+| `created_at` | TEXT NOT NULL DEFAULT datetime('now') | |
+| `updated_at` | TEXT | set on edit |
+| `archived_at` | TEXT | set when archived |
+
+**Migration / backfill:** existing rows map to `interval_unit='month'`,
+`interval_count = interval_months`, `status = active?'active':'inactive'`,
+`customer_available = active`, `display_order` by id. The deactivated
+`Introductory` row (already `active=0` per current migration) becomes
+`status='inactive'`. The rebuild is skipped once the new shape is detected
+(guarded by a `PRAGMA table_info` check on `interval_unit`), so repeated boots
+are no-ops.
+
+**`interval_months` is retired from code.** A new `lib/billing.js` centralizes
+the two operations that used it:
+- `monthsEquivalent(unit, count)` → fractional months, for MRR normalization
+  (week = count×7/30.436, day = count/30.436, month = count, year = count×12).
+- `addInterval(dateISO, unit, count)` → next-billing date, replacing
+  `setMonth(+interval_months)` and the `+N days` SQL in the customer plan change.
+- `frequencyLabel(unit, count)` → display string ("weekly", "every 2 weeks",
+  "monthly", "every 6 months", "yearly"), and `priceLabel(cents, unit, count)`
+  → "$8 / week", "$155 / 6 months".
+
+All current `interval_months` call sites (`routes/admin.js` MRR,
+`routes/customer.js` `/subscription`, `/plans`, `/plan/change`, `lib/signup.js`
+next-billing) switch to these helpers.
+
+### 2. Price changes — section 11 (chosen approach: record + apply at effective date)
+
+New table `plan_price_changes`:
+
+| column | notes |
+|---|---|
+| `id` PK | |
+| `plan_id` → plans(id) | |
+| `old_price_cents`, `new_price_cents` | |
+| `applies_to` CHECK IN ('new','existing_and_new') | |
+| `effective_date` | YYYY-MM-DD |
+| `reason` | text, optional |
+| `status` CHECK IN ('scheduled','applied','cancelled') DEFAULT 'scheduled' | |
+| `created_by` → users(id), `created_at`, `applied_at` | |
+
+Function `applyDuePriceChanges()` (in `lib/plans.js`), idempotent and cheap
+(`WHERE status='scheduled' AND effective_date <= date('now')`), runs on boot
+(from `migrate()` / server start) and at the top of admin + customer plan reads:
+
+- Sets `plans.price_cents = new_price_cents`, `updated_at = now`.
+- If `applies_to = 'existing_and_new'`: updates `locked_price_cents` for that
+  plan's live subscriptions (`status IN ('active','past_due','paused')`), writes
+  an `audit_log` row per change. **`payments` history is never touched** (section
+  10). Promo/intro subscriptions keep their frozen `promo_price_cents` until it
+  expires, then revert to the new standard `locked_price_cents`.
+- Marks the row `applied`, sets `applied_at`.
+
+`applies_to='new'` (the default) only changes the plan's own price going forward.
+Editing a plan's price directly in the Edit form is treated as an immediate
+`new`-scope change (no existing subscriber is touched). "Existing + new" is only
+reachable through an explicit price-change action that **requires an effective
+date**, so existing pricing is never silently changed.
+
+### 3. Lifecycle & management — sections 2, 9
+
+`lib/plan_lifecycle.js` drives `lib/lifecycle.js` with statuses
+draft/active/inactive/archived and single-action transitions:
+
+- **activate** (draft/inactive → active)
+- **deactivate** (active → inactive) — stops new subscriptions; existing history
+  stays
+- **archive** (any → archived) — out of active views, preserved historically;
+  sets `archived_at`
+- **restore** (archived → inactive)
+
+Create, Edit, and **Duplicate** are ordinary CRUD (not lifecycle transitions).
+Duplicate clones a plan as a fresh `draft` with a new unique code, name +
+" (Copy)", `customer_available=0`, and no subscription history.
+
+**No hard-delete of a plan with subscription history.** A `deletable`-style
+check (mirroring `lib/deletable.js`) reports whether any `subscriptions` or
+`coupon_plans` reference the plan; if so, Delete is unavailable and Archive is
+the path. A never-used draft with zero references may be hard-deleted.
+
+### 4. Admin UI — sections 15, 16
+
+New **"Subscription Plans"** tab in the admin dashboard
+(`public/dashboard/admin/index.html` + `admin.js`), following the existing
+page-state pattern (list → manage → edit → save/cancel → back to list with
+nothing selected; tab re-entry resets selection).
+
+List table columns (section 15): **Plan · Price · Billing Frequency · Customer
+Available · Status · Customers · Action**. "Customers" is the count of live
+subscriptions on the plan. Create/Edit form fields: name, description, price,
+billing frequency (with a Custom option exposing unit + count), customer
+availability, status, display order, label, internal notes.
+
+New `routes/plans.js` mounted under `/api/admin/plans`:
+- `GET /` list (with customer counts), `GET /:id` one, `POST /` create,
+  `PATCH /:id` edit, `POST /:id/duplicate`, `DELETE /:id` (guarded by the
+  deletability check).
+- `GET /:id/actions` + `POST /:id/action` for lifecycle transitions (mirrors the
+  community lifecycle endpoints).
+- `POST /:id/price-change` to schedule a section-11 price change;
+  `GET /:id/price-changes` to list them; `POST /:id/price-change/:pcid/cancel`.
+
+All routes guarded by the new permissions below and audited via `lib/audit.js`.
+
+### 5. Permissions — section 18
+
+Add to the `permissions` catalog (new "Plans & Billing" category):
+`plans.view`, `plans.create`, `plans.edit`, `plans.status` (activate/deactivate),
+`plans.archive`. Admin is absolute already; other roles gated via
+`role_permissions`. The admin tab is hidden unless the user has `plans.view`
+(same `data-perm` mechanism as System Settings).
+
+### 6. Customer selection — section 12 (authenticated dashboard only, per decision)
+
+`routes/customer.js` `/plans` filters to `status='active' AND
+customer_available=1`, ordered by `display_order`, and returns each plan's real
+billing frequency + price label from `lib/billing.js`. The current-plan row is
+still always included even if it later becomes unavailable (existing behavior).
+`/plan/change` validates the target the same way (active + available) and uses
+`addInterval()` for the new `next_billing_date`.
+
+**Out of scope:** the public marketing signup wizard
+(`public/index.html`, `public/scripts.js`) stays on its current hardcoded
+intro/Monthly/Quarterly/Annual flow — the delicate first-100 intro-promotion
+logic in `lib/signup.js` is untouched.
+
+### 7. Demo payment compatibility — section 13
+
+No change to `lib/payments/*`. A customer selecting any configured plan (e.g. a
+weekly or bi-annual plan) charges the plan's price through the demo provider and
+creates the subscription with `locked_price_cents` and an `addInterval()`-derived
+`next_billing_date`. Verified by a test using a weekly plan.
+
+### 8. Coupon compatibility — section 14 (integrate, do not redesign)
+
+The existing `coupon_plans` eligibility system references plans by id/code, which
+persist through the rebuild — so it keeps working unchanged. The only UI change:
+the hardcoded plan `<option>` list in the customer-filter dropdown
+(`index.html:63`, Introductory/Monthly/Quarterly/Annual) and any other hardcoded
+plan pickers become dynamically populated from the configured non-archived plans,
+so newly created plans appear automatically. No change to coupon data model or
+redemption logic.
+
+### 9. Seed data
+
+`db/seed.js` updates the three seeded plans to the new columns (month × 1/3/12,
+`status='active'`, `customer_available=1`, sensible `display_order`), and (for
+demonstration) may add one sub-monthly example (e.g. a Weekly plan) so the
+non-monthly path is exercised out of the box. Reference-data seeding only —
+no change to how demo customers/subscriptions are generated.
+
+## Testing (node:test, existing style under `server/test/`)
+
+1. **Billing math** — `lib/billing.js`: `addInterval` and `monthsEquivalent`
+   for day/week/month/year and multi-count intervals; `priceLabel`/`frequencyLabel`.
+2. **Migration/rebuild** — old plans backfill to unit+count; FKs from
+   subscriptions/coupon_plans survive; rebuild is idempotent.
+3. **Lifecycle** — draft→active→inactive→archived→restore; invalid transitions
+   rejected server-side.
+4. **No delete with history** — a plan with a subscription cannot be
+   hard-deleted; a fresh draft can.
+5. **Price change** — a scheduled `existing_and_new` change applies at its
+   effective date, updates live subscriptions' `locked_price_cents`, leaves
+   `payments` history untouched, and is idempotent; a `new`-scope change touches
+   no existing subscriber.
+6. **Customer availability gating** — `/plans` returns only active + available
+   plans in `display_order`; a draft/unavailable plan is hidden.
+7. **Coupon eligibility intact** — a coupon restricted to a plan still validates
+   after the rebuild.
+8. **Demo payment with a weekly plan** — signup/charge on a weekly plan creates a
+   subscription with the correct locked price and next-billing date.
+
+## Risks & mitigations
+
+- **`plans` table rebuild** is the riskiest step. Mitigation: guarded/idempotent
+  migration that recreates the table with FKs, copies rows, and is skipped once
+  the new shape exists; covered by a migration test; taken on an isolated feature
+  branch.
+- **Re-pricing existing subscribers** changes only their current forward rate,
+  never past invoices; gated behind an explicit effective-dated action.
+- **No scheduler** — price changes apply lazily on boot and on plan reads, which
+  is sufficient because billing here is demo/manual.
+
+## Non-goals
+
+- No real payment provider.
+- No pricing calculator (section 5 — admin sets prices directly).
+- No changes to the public marketing wizard or the coupon/credit data models.
+- No customer-facing plan changes beyond what already exists.
