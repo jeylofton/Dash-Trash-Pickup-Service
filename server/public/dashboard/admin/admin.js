@@ -2213,7 +2213,9 @@ function showPlan(id) {
         <div><label for="pcReason">Reason (optional)</label><input id="pcReason" /></div>
       </div>
       <p class="msg" id="pcMsg" hidden></p>
-      <button class="btn btn-primary" id="pcSave">Apply price change</button>
+      <div class="form-actions-bar">
+        <button class="btn btn-primary" id="pcSave">Apply price change</button>
+      </div>
     </div>
 
     <div class="card">
