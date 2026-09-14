@@ -358,7 +358,7 @@ if (shouldListen) {
      failure logs but never stops the server from listening. */
   try {
     if (!one('SELECT id FROM users LIMIT 1')) {
-      await seedFreshInstall();
+      seedFreshInstall();
       console.log('  fresh database detected -> seeded owner + training accounts');
     }
   } catch (e) {

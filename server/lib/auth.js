@@ -10,7 +10,7 @@
    what makes an XSS bug non-fatal.
    ============================================================ */
 
-import { randomBytes, scrypt as _scrypt, timingSafeEqual, createHash, randomUUID } from 'node:crypto';
+import { randomBytes, scrypt as _scrypt, scryptSync, timingSafeEqual, createHash, randomUUID } from 'node:crypto';
 import { promisify } from 'node:util';
 import { one, run } from '../db/index.js';
 
@@ -31,6 +31,18 @@ function sessionDaysFor(role) {
 export async function hashPassword(password) {
   const salt = randomBytes(16).toString('hex');
   const key = await scrypt(password, salt, KEYLEN);
+  return `scrypt$${salt}$${key.toString('hex')}`;
+}
+
+/* Synchronous twin of hashPassword, producing the identical
+   `scrypt$salt$key` format verifyPassword expects. Used by the boot-time
+   seed (db/seed.js) so seeding needs no top-level await - a managed host
+   like Hostinger/Passenger imports server.js, and a top-level await in that
+   import graph can stall startup. Only ever used to seed fixed demo
+   accounts, never on a request path, so the sync CPU cost is irrelevant. */
+export function hashPasswordSync(password) {
+  const salt = randomBytes(16).toString('hex');
+  const key = scryptSync(password, salt, KEYLEN);
   return `scrypt$${salt}$${key.toString('hex')}`;
 }
 

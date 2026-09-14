@@ -25,7 +25,7 @@
 import { db, migrate, one, run, tx, migrateDemoFlags } from './index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './migrate_admin.js';
 import { migrateCommunityLifecycle } from './migrate_lifecycle.js';
-import { hashPassword } from '../lib/auth.js';
+import { hashPasswordSync } from '../lib/auth.js';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -47,7 +47,7 @@ const OWNER_PASSWORD = 'DashDemo2026';
    migrates before calling it; the CLI wrapper at the bottom of this file
    migrates first for a standalone `node db/seed.js` run.
    ============================================================ */
-export async function seedFreshInstall({ reset = false } = {}) {
+export function seedFreshInstall({ reset = false } = {}) {
   if (reset) {
     const tables = ['pickup_photos', 'pickup_records', 'service_stops', 'route_assignments',
       'route_stops', 'routes', 'pickup_schedules', 'time_entries', 'employee_compensation',
@@ -64,12 +64,12 @@ export async function seedFreshInstall({ reset = false } = {}) {
 
   if (one('SELECT id FROM users LIMIT 1')) return false;   // already seeded - no-op
 
-  const ownerHash = await hashPassword(OWNER_PASSWORD);
+  const ownerHash = hashPasswordSync(OWNER_PASSWORD);
   // Training accounts use intentionally simple passwords (see the white-label
   // spec, "practice credentials are intentionally simple"). They are safe only
   // because these accounts touch nothing but their own is_demo sandbox.
-  const custHash = await hashPassword('customer');
-  const empHash = await hashPassword('employee');
+  const custHash = hashPasswordSync('customer');
+  const empHash = hashPasswordSync('employee');
 
   const mkUser = (email, hash, role, first, last, phone, demo = 0) =>
     run(`INSERT INTO users (email, password_hash, role, first_name, last_name, phone, is_demo)
@@ -191,7 +191,7 @@ if (isDirectRun) {
   migrateCommunityLifecycle();
   migrateDemoFlags();
 
-  const seeded = await seedFreshInstall({ reset: process.argv.includes('--reset') });
+  const seeded = seedFreshInstall({ reset: process.argv.includes('--reset') });
   if (!seeded) {
     console.log('  database already has users - nothing seeded (use --reset to rebuild)');
     process.exit(0);
