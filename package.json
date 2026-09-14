@@ -1,0 +1,25 @@
+{
+  "name": "dash-trash-pickup",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dash Trash Pickup - marketing site + Express backend. Deploys as one app: the server (in server/) serves the static site from the repo root, so a host must deploy the WHOLE repo, not just server/.",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test server/test/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "comments": {
+    "overrides": "Mirror of server/package.json: force the patched qs across the tree (express@4 pins a qs in the vulnerable range, GHSA-x5fp-wj9c-mxmx et al). 6.16 is API-compatible."
+  },
+  "overrides": {
+    "qs": "^6.16.0"
+  }
+}
