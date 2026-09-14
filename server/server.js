@@ -39,7 +39,6 @@ import { attachDevReload, DEV_RELOAD_SNIPPET } from './lib/devreload.js';
 import { attachBrandedHtml } from './lib/htmlserve.js';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { realpathSync } from 'node:fs';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -332,17 +331,24 @@ const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssu
 if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
 migrateDemoFlags();   // after the admin rebuilds, so is_demo columns survive
 
-const isMain = (() => {
-  try { return process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); }
-  catch { return false; }
-})();
+/* Start the HTTP listener whenever this module is loaded to RUN the app -
+   whether it is executed directly (`node server.js`) or imported by a host's
+   process manager. Managed Node hosts (e.g. Hostinger/Passenger) load this
+   file instead of running it as the main module, and shared-hosting paths are
+   symlinked, so the old `realpath(argv[1]) === import.meta.url` check was false
+   there and the server never called listen() -> the platform returned 503.
+   Only the test files import { app } to attach their own listener, and they
+   run under `node --test`; we detect that and skip auto-listen so tests don't
+   bind a stray port. START_SERVER=0 also forces it off if ever needed. */
+const underTestRunner = process.execArgv.some(a => a === '--test' || a.startsWith('--test'));
+const shouldListen = !underTestRunner && process.env.START_SERVER !== '0';
 
-if (isMain) {
+if (shouldListen) {
   purgeExpiredSessions();
   setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
-  app.listen(PORT, async () => {
+  app.listen(PORT, () => {
     console.log(`\n  ${publicBranding().name} API`);
-    console.log(`  http://localhost:${PORT}\n`);
+    console.log(`  listening on port ${PORT}\n`);
     console.log('  Payments: DEMO - no real money moves');
     console.log(`  Payment provider: ${providerName}\n`);
   });
