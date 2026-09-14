@@ -18,6 +18,7 @@ import { enrol } from './lib/signup.js';
 import { payments, providerName } from './lib/payments/index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
 import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
+import { seedFreshInstall } from './db/seed.js';
 import { introCoupon } from './lib/coupons.js';
 import { attachUser, requirePasswordCurrent } from './lib/rbac.js';
 import { purgeExpiredSessions } from './lib/auth.js';
@@ -348,6 +349,22 @@ const underTestRunner = process.execArgv.some(a => a === '--test' || a.startsWit
 const shouldListen = !underTestRunner && process.env.START_SERVER !== '0';
 
 if (shouldListen) {
+  /* First boot of a fresh deployment. A GitHub/Hostinger deploy ships no
+     database - the .db files are gitignored - so the server comes up with an
+     empty schema and nobody can log in until it is seeded. Seed the owner +
+     training accounts once, here, so a brand-new deploy is demo-ready with no
+     manual step. seedFreshInstall() is a no-op the instant any user exists, so
+     every later boot skips it and real data is never touched. Guarded so a seed
+     failure logs but never stops the server from listening. */
+  try {
+    if (!one('SELECT id FROM users LIMIT 1')) {
+      await seedFreshInstall();
+      console.log('  fresh database detected -> seeded owner + training accounts');
+    }
+  } catch (e) {
+    console.error('  seed-on-boot failed:', e.message);
+  }
+
   purgeExpiredSessions();
   setInterval(purgeExpiredSessions, 6 * 60 * 60 * 1000).unref();
   app.listen(PORT, () => {

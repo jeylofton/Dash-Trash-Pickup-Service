@@ -26,49 +26,56 @@ import { db, migrate, one, run, tx, migrateDemoFlags } from './index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './migrate_admin.js';
 import { migrateCommunityLifecycle } from './migrate_lifecycle.js';
 import { hashPassword } from '../lib/auth.js';
-
-const RESET = process.argv.includes('--reset');
-
-// Run the SAME migration chain the server boot runs, so the schema is final
-// before seeding (in particular is_demo exists and later boots won't rebuild a
-// table and drop the flags we set here).
-migrate();
-migrateAdmin(); migrateCommunities(); migrateIssueCodes(); migrateAdminControls(); migrateDynamicRoles();
-migrateCommunityLifecycle();
-migrateDemoFlags();
-
-if (RESET) {
-  const tables = ['pickup_photos', 'pickup_records', 'service_stops', 'route_assignments',
-    'route_stops', 'routes', 'pickup_schedules', 'time_entries', 'employee_compensation',
-    'pay_periods', 'payments', 'subscriptions', 'coupon_redemptions', 'service_credits',
-    'service_addresses', 'units', 'buildings', 'communities', 'customer_notes',
-    'employee_notes', 'audit_log', 'sessions', 'customers', 'employees', 'users',
-    'coupons', 'plans'];
-  db.exec('PRAGMA foreign_keys = OFF');
-  for (const t of tables) { try { db.exec(`DELETE FROM ${t}`); } catch {} }
-  db.exec(`DELETE FROM sqlite_sequence`);
-  db.exec('PRAGMA foreign_keys = ON');
-  console.log('  reset: all data cleared');
-}
-
-if (one('SELECT id FROM users LIMIT 1')) {
-  console.log('  database already has users - nothing seeded (use --reset to rebuild)');
-  process.exit(0);
-}
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const OWNER_PASSWORD = 'DashDemo2026';
-const ownerHash = await hashPassword(OWNER_PASSWORD);
-// Training accounts use intentionally simple passwords (see the white-label
-// spec, "practice credentials are intentionally simple"). They are safe only
-// because these accounts touch nothing but their own is_demo sandbox.
-const custHash = await hashPassword('customer');
-const empHash = await hashPassword('employee');
 
-const mkUser = (email, hash, role, first, last, phone, demo = 0) =>
-  run(`INSERT INTO users (email, password_hash, role, first_name, last_name, phone, is_demo)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`, email, hash, role, first, last, phone, demo).lastInsertRowid;
+/* ============================================================
+   Seed a fresh install: the real owner plus the two isolated training
+   accounts (see the file header). Exported so the SERVER BOOT can call
+   it too - a GitHub/Hostinger deploy ships no database (the .db files
+   are gitignored), so the very first boot starts empty and must seed
+   itself or nobody can log in.
 
-tx(() => {
+   SAFE BY CONSTRUCTION: it seeds only when the users table is empty and
+   returns false otherwise, so calling it on every boot never touches a
+   database that already has data. `reset: true` (the CLI's --reset)
+   clears everything first to rebuild from scratch.
+
+   The schema must already be migrated before this runs. The server boot
+   migrates before calling it; the CLI wrapper at the bottom of this file
+   migrates first for a standalone `node db/seed.js` run.
+   ============================================================ */
+export async function seedFreshInstall({ reset = false } = {}) {
+  if (reset) {
+    const tables = ['pickup_photos', 'pickup_records', 'service_stops', 'route_assignments',
+      'route_stops', 'routes', 'pickup_schedules', 'time_entries', 'employee_compensation',
+      'pay_periods', 'payments', 'subscriptions', 'coupon_redemptions', 'service_credits',
+      'service_addresses', 'units', 'buildings', 'communities', 'customer_notes',
+      'employee_notes', 'audit_log', 'sessions', 'customers', 'employees', 'users',
+      'coupons', 'plans'];
+    db.exec('PRAGMA foreign_keys = OFF');
+    for (const t of tables) { try { db.exec(`DELETE FROM ${t}`); } catch {} }
+    db.exec(`DELETE FROM sqlite_sequence`);
+    db.exec('PRAGMA foreign_keys = ON');
+    console.log('  reset: all data cleared');
+  }
+
+  if (one('SELECT id FROM users LIMIT 1')) return false;   // already seeded - no-op
+
+  const ownerHash = await hashPassword(OWNER_PASSWORD);
+  // Training accounts use intentionally simple passwords (see the white-label
+  // spec, "practice credentials are intentionally simple"). They are safe only
+  // because these accounts touch nothing but their own is_demo sandbox.
+  const custHash = await hashPassword('customer');
+  const empHash = await hashPassword('employee');
+
+  const mkUser = (email, hash, role, first, last, phone, demo = 0) =>
+    run(`INSERT INTO users (email, password_hash, role, first_name, last_name, phone, is_demo)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`, email, hash, role, first, last, phone, demo).lastInsertRowid;
+
+  tx(() => {
   /* ---------- reference data (real, shared configuration) ---------- */
   const plans = [
     ['Introductory', 'Introductory Rate', 1, 1800, 1],
@@ -159,10 +166,38 @@ tx(() => {
   run(`INSERT INTO audit_log (actor_user_id, actor_role, action, entity_type, detail)
        VALUES (?, 'admin', 'seed.database', 'system', ?)`,
       ownerId, JSON.stringify({ note: 'fresh install: owner + training accounts' }));
-});
+  });
+  return true;
+}
 
-const count = (t, where = '') => one(`SELECT COUNT(*) AS n FROM ${t} ${where}`).n;
-console.log(`
+/* ------------------------------------------------------------
+   CLI entry point: `node db/seed.js [--reset]`.
+
+   Runs ONLY when this file is executed directly, never when the server
+   imports seedFreshInstall (the isDirectRun guard compares the resolved
+   path of argv[1] against this module). Importing therefore has no side
+   effects - no migrations, no seeding, no process.exit.
+   ------------------------------------------------------------ */
+const isDirectRun = process.argv[1] && (() => {
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return false; }
+})();
+
+if (isDirectRun) {
+  // Build the schema first (the same migration chain the server boot runs), so
+  // a standalone run against an empty file has its tables before seeding.
+  migrate();
+  migrateAdmin(); migrateCommunities(); migrateIssueCodes(); migrateAdminControls(); migrateDynamicRoles();
+  migrateCommunityLifecycle();
+  migrateDemoFlags();
+
+  const seeded = await seedFreshInstall({ reset: process.argv.includes('--reset') });
+  if (!seeded) {
+    console.log('  database already has users - nothing seeded (use --reset to rebuild)');
+    process.exit(0);
+  }
+  const count = (t, where = '') => one(`SELECT COUNT(*) AS n FROM ${t} ${where}`).n;
+  console.log(`
   Fresh install seeded.
 
   Owner (real, empty dashboard):
@@ -175,3 +210,5 @@ console.log(`
   Real business rows (all 0 -> blank slate):
     customers ${count('customers', 'WHERE is_demo=0')}   communities ${count('communities', 'WHERE is_demo=0')}   routes ${count('routes', 'WHERE is_demo=0')}   employees ${count('employees', 'WHERE is_demo=0')}
 `);
+  process.exit(0);
+}
