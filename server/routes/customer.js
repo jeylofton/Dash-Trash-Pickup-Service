@@ -4,6 +4,7 @@ import { requireRole, requireCustomer } from '../lib/rbac.js';
 import { audit } from '../lib/audit.js';
 import { payments as provider, providerName } from '../lib/payments/index.js';
 import { DAY_NAMES, today } from '../lib/schedule.js';
+import { addInterval, frequencyLabel, perLabel } from '../lib/billing.js';
 
 export const router = Router();
 router.use(requireRole('customer'), requireCustomer);
@@ -73,7 +74,7 @@ router.get('/account', (req, res) => {
   const notice = serviceNotice(address);
 
   const subscription = one(`
-    SELECT s.*, p.code AS plan_code, p.name AS plan_name, p.interval_months
+    SELECT s.*, p.code AS plan_code, p.name AS plan_name, p.interval_unit, p.interval_count
       FROM subscriptions s JOIN plans p ON p.id = s.plan_id
      WHERE s.customer_id = ? AND s.status != 'cancelled'
      ORDER BY s.id DESC LIMIT 1`, req.customer.id);
@@ -90,7 +91,10 @@ router.get('/account', (req, res) => {
     subscription: subscription && {
       plan: subscription.plan_name,
       planCode: subscription.plan_code,
-      intervalMonths: subscription.interval_months,
+      intervalUnit: subscription.interval_unit,
+      intervalCount: subscription.interval_count,
+      frequency: frequencyLabel(subscription.interval_unit, subscription.interval_count),
+      perLabel: perLabel(subscription.interval_unit, subscription.interval_count),
       // The price actually in effect: the frozen promotional rate while
       // the term still has periods left, otherwise the standard rate.
       // locked_price_cents alone would show $28 to a customer paying $18.
@@ -130,14 +134,19 @@ router.get('/plans', (req, res) => {
   // offer the introductory plan to anyone who is not already on it. The
   // Introductory plans row itself is deactivated (Task 8 — it is a
   // promotion on Monthly now, not a selectable plan), so it must be
-  // included here by id even though `active = 0`, or an existing
-  // introductory customer's current plan would vanish from their own
-  // dashboard.
-  const available = all(`SELECT id, code, name, interval_months, price_cents, is_intro
-                           FROM plans WHERE active = 1 OR id = ?`, current?.plan_id ?? -1)
+  // included here by id even though it is not `active`+`customer_available`,
+  // or an existing introductory customer's current plan would vanish from
+  // their own dashboard.
+  const available = all(`SELECT id, code, name, interval_unit, interval_count, price_cents, is_intro,
+                                status, customer_available, display_order
+                           FROM plans
+                          WHERE (status = 'active' AND customer_available = 1) OR id = ?
+                          ORDER BY display_order, id`, current?.plan_id ?? -1)
     .filter(p => !p.is_intro || current?.code === 'Introductory')
     .map(p => ({
-      code: p.code, name: p.name, intervalMonths: p.interval_months,
+      code: p.code, name: p.name,
+      frequency: frequencyLabel(p.interval_unit, p.interval_count),
+      perLabel: perLabel(p.interval_unit, p.interval_count),
       price: money(p.price_cents), isIntro: Boolean(p.is_intro),
       isCurrent: current?.plan_id === p.id,
       // The price this customer actually pays right now - the frozen
@@ -202,7 +211,9 @@ router.post('/plan/change', (req, res) => {
   // The deactivated Introductory row must still resolve here (rather than
   // 404-ing as "not available") so the explicit intro-block check below
   // fires with its specific message instead of a generic one.
-  const plan = one(`SELECT * FROM plans WHERE code = ? AND (active = 1 OR code = 'Introductory')`, planCode);
+  const plan = one(`SELECT * FROM plans
+                     WHERE code = ? AND ((status = 'active' AND customer_available = 1)
+                                          OR code = 'Introductory')`, planCode);
   if (!plan) return res.status(400).json({ error: 'That plan is not available.' });
 
   const current = one(`
@@ -219,13 +230,16 @@ router.post('/plan/change', (req, res) => {
 
   const previous = { plan: current.code, price: money(current.locked_price_cents) };
 
+  const startDate = new Date().toISOString().slice(0, 10);
+  const nextBilling = addInterval(startDate, plan.interval_unit, plan.interval_count);
+
   tx(() => {
     run(`UPDATE subscriptions SET status = 'cancelled', cancelled_at = datetime('now'),
                                   cancel_reason = 'plan change' WHERE id = ?`, current.id);
     run(`INSERT INTO subscriptions (customer_id, plan_id, locked_price_cents, status, provider,
                                     started_at, next_billing_date)
-         VALUES (?, ?, ?, 'pending', ?, date('now'), date('now','+' || ? || ' days'))`,
-        req.customer.id, plan.id, plan.price_cents, providerName, String(30 * plan.interval_months));
+         VALUES (?, ?, ?, 'pending', ?, ?, ?)`,
+        req.customer.id, plan.id, plan.price_cents, providerName, startDate, nextBilling);
     // Leaving the introductory plan gives up the promotional flag.
     if (current.code === 'Introductory' && !plan.is_intro) {
       run('UPDATE customers SET is_intro = 0 WHERE id = ?', req.customer.id);
