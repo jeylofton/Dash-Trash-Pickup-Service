@@ -39,15 +39,15 @@
       remindAfterDays: 7,   // dismissed? don't show again for this many days
     },
 
+    /* ---- Currency symbol for display ---- */
+    currency: '$',
+
     /* ---- Standard plans ----
-       Quarterly and annual totals are CALCULATED from the monthly price
-       minus the discount below, so you only ever edit these numbers. */
-    pricing: {
-      monthly: 28,          // <-- target range $25-$30
-      quarterlyDiscount: 10,  // $ off the 3-month total
-      annualDiscount: 60,     // $ off the 12-month total
-      currency: '$',
-    },
+       There is intentionally NO hard-coded plan pricing here. Plans (name,
+       price, billing frequency, label, availability, display order) are the
+       admin's data and are fetched from /api/subscription-plans/public — the
+       same records Admin -> Subscription Plans manages. Edit a plan there and
+       it changes everywhere; nothing about pricing is edited in this file. */
 
     /* ---- Service schedule ----
        Days are written once here and rendered everywhere they appear. */
@@ -86,28 +86,65 @@
   const money = (n) => {
     const v = Math.round(n * 100) / 100;
     const str = Number.isInteger(v) ? v.toString() : v.toFixed(2);
-    return CONFIG.pricing.currency + str.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return CONFIG.currency + str.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   };
 
-  const PRICING = (() => {
-    const { monthly, quarterlyDiscount, annualDiscount } = CONFIG.pricing;
-    const quarterly = monthly * 3 - quarterlyDiscount;
-    const annual = monthly * 12 - annualDiscount;
+  // Plan names and labels are admin-entered, so escape them before they ever
+  // touch innerHTML.
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  /* Average Gregorian month — mirrors server/lib/billing.js so the client's
+     "effective monthly" and savings figures match the backend's math. */
+  const DAYS_PER_MONTH = 30.436875;
+  function monthsEquivalent(unit, count) {
+    const n = Number(count) || 0;
+    if (unit === 'week') return (n * 7) / DAYS_PER_MONTH;
+    if (unit === 'year') return n * 12;
+    return n; // month
+  }
+
+  /* The plans fetched from the backend — the single source of truth — in the
+     admin's display order, plus a by-code view model with derived pricing. */
+  let apiPlans = [];
+  let planByCode = new Map();
+
+  function buildPlanViews(plans) {
+    // The monthly-equivalent plan (billed every 1 month) is the baseline the
+    // "save $X vs. paying monthly" figure is measured against.
+    const base = plans.find(p => p.intervalUnit === 'month' && p.intervalCount === 1);
+    const baseMonthly = base ? base.price : null;
+    const map = new Map();
+    for (const p of plans) {
+      const months = monthsEquivalent(p.intervalUnit, p.intervalCount) || 1;
+      const perMonth = p.price / months;
+      const saves = baseMonthly != null
+        ? Math.max(0, Math.round((baseMonthly * months - p.price) * 100) / 100)
+        : 0;
+      map.set(p.code, { ...p, total: p.price, months, perMonth, saves });
+    }
+    return map;
+  }
+
+  /* The introductory rate is a PROMOTION, not a selectable plan record, so it
+     is not in the public feed. Its view is derived from the live promotion
+     (spotsState) with the standard Monthly price as the "then $X/mo" rate. */
+  function introView() {
+    const after = planByCode.get('Monthly')?.total ?? null;
+    const price = spotsState.priceDollars ?? CONFIG.intro.price;
     return {
-      intro:     { total: CONFIG.intro.price, months: 1,  perMonth: CONFIG.intro.price, saves: 0,
-                   termMonths: CONFIG.intro.termMonths, after: monthly },
-      monthly:   { total: monthly,   months: 1,  perMonth: monthly,       saves: 0 },
-      quarterly: { total: quarterly, months: 3,  perMonth: quarterly / 3,  saves: quarterlyDiscount },
-      annual:    { total: annual,    months: 12, perMonth: annual / 12,    saves: annualDiscount },
+      code: 'Introductory', name: CONFIG.intro.label,
+      total: price, months: 1, perMonth: price, saves: 0,
+      termMonths: CONFIG.intro.termMonths, after, isIntro: true,
     };
-  })();
+  }
 
-  const PLAN_KEY = {
-    'Introductory': 'intro',
-    'Monthly': 'monthly',
-    'Quarterly': 'quarterly',
-    'Annual': 'annual',
-  };
+  /* Resolve a signup radio value (a plan code) to its pricing view. Community-
+     Wide Pricing is a custom quote with no view, so this returns null. */
+  function viewForPlan(code) {
+    if (code === 'Introductory') return introView();
+    return planByCode.get(code) || null;
+  }
 
   const scheduleDays = () => {
     const d = CONFIG.schedule.days;
@@ -171,6 +208,21 @@
     return { available: CONFIG.serviceArea.zips.includes(String(zip).trim()) };
   }
 
+  // The customer-visible plans, straight from the backend (the same records
+  // Admin manages). Returns [] if the API is unavailable so the page can show a
+  // clear message rather than fabricate prices.
+  async function fetchPublicPlans() {
+    if (CONFIG.api.enabled) {
+      try {
+        const { plans } = await api('/api/subscription-plans/public');
+        return Array.isArray(plans) ? plans : [];
+      } catch (err) {
+        console.warn('[Dash] plans unavailable.', err.message);
+      }
+    }
+    return [];
+  }
+
   function showPaymentError(message) {
     const el = $('[data-payment-error]');
     if (!el) return;
@@ -198,45 +250,88 @@
     if (note) note.textContent = scheduleSentence();
   }
 
-  function renderPricing() {
-    const map = { monthly: 'monthly', quarterly: 'quarterly', annual: 'annual' };
-    Object.entries(map).forEach(([attr, key]) => {
-      const p = PRICING[key];
-      $$(`[data-price="${attr}"]`).forEach(el => { el.textContent = money(p.total); });
-      $$(`[data-priceNote="${attr}"]`).forEach(el => {
-        el.textContent = p.months === 1
-          ? 'Billed monthly'
-          : `${money(p.perMonth)}/mo effective · save ${money(p.saves)}`;
-      });
-      $$(`[data-discount="${attr}"]`).forEach(el => {
-        el.textContent = `${money(p.saves)} off vs. paying monthly`;
-      });
-    });
+  /* Render the public pricing cards from the backend plan feed. Name, price,
+     billing frequency, description, label, and order are all data — nothing
+     about the offering is hard-coded here. Keeps the existing card design. */
+  function renderPlanCards() {
+    const grid = $('[data-plan-grid]');
+    if (!grid) return;
+    if (!apiPlans.length) {
+      grid.innerHTML = '<p class="plan-grid-status">Plans are unavailable right now. '
+        + 'Please refresh, or contact us to get started.</p>';
+      return;
+    }
+    grid.innerHTML = apiPlans.map(p => planCardHTML(planByCode.get(p.code))).join('');
+  }
 
-    // The advertised rate follows the live promotion (spotsState.priceDollars)
-    // when the API has supplied one; CONFIG.intro.price is only the offline
-    // fallback, never the source of truth once the server has spoken.
-    const introPrice = spotsState.priceDollars ?? CONFIG.intro.price;
+  function billingBullet(v) {
+    if (v.intervalUnit === 'month' && v.intervalCount === 1) return 'Monthly recurring billing';
+    if (v.intervalUnit === 'year' && v.intervalCount === 1) return 'Single annual payment';
+    return `One payment ${v.frequency}`;
+  }
 
-    // plan picker labels inside the signup form
-    $$('[data-option-price]').forEach(el => {
-      const key = el.dataset.optionPrice;
-      const p = PRICING[key];
-      if (!p) return;
-      const per = { intro: '/mo', monthly: '/mo', quarterly: '/qtr', annual: '/yr' }[key];
-      el.textContent = key === 'intro'
-        ? `${money(introPrice)}/mo for ${p.termMonths} mo, then ${money(p.after)}/mo`
-        : money(p.total) + per;
-    });
+  function planCardHTML(v) {
+    const featured = v.label ? ' featured' : '';
+    const badge = v.label ? `<div class="popular">${esc(v.label)}</div>` : '';
+    const term = v.description || `Billed ${v.frequency}`;
+    const priceNote = v.months <= 1
+      ? 'Billed monthly'
+      : `${money(v.perMonth)}/mo effective · save ${money(v.saves)}`;
+    const bullets = [
+      `${CONFIG.schedule.perWeek} pickups per week`,
+      'Doorstep trash collection',
+      billingBullet(v),
+      v.saves > 0 ? `${money(v.saves)} off vs. paying monthly` : 'Cancel or change anytime',
+    ];
+    const btnClass = v.label ? 'btn btn-primary' : 'btn btn-outline';
+    return `<article class="plan${featured}">
+      ${badge}
+      <h3>${esc(v.name)}</h3>
+      <div class="term">${esc(term)}</div>
+      <div class="price">${money(v.total)} <small>${esc(v.perLabel)}</small></div>
+      <div class="price-sub">${esc(priceNote)}</div>
+      <ul>${bullets.map(b => `<li>${esc(b)}</li>`).join('')}</ul>
+      <button class="${btnClass} choose-plan" data-plan="${esc(v.code)}">Choose ${esc(v.name)}</button>
+    </article>`;
+  }
+
+  /* Render the standard-plan radios in the signup wizard from the same feed.
+     The Introductory (a promotion) and Community-wide (a custom quote) options
+     are static in the HTML; only the real plans are data-driven here. */
+  function renderSignupOptions() {
+    const host = $('[data-standard-plans]');
+    if (!host) return;
+    host.innerHTML = apiPlans.map(p => {
+      const v = planByCode.get(p.code);
+      return `<label class="plan-option">
+        <input type="radio" name="plan" value="${esc(v.code)}" hidden />
+        <span class="plan-option-body">
+          <span class="plan-option-name">${esc(v.name)}</span>
+          <span class="plan-option-price">${money(v.total)} ${esc(v.perLabel)}</span>
+        </span>
+      </label>`;
+    }).join('');
+  }
+
+  /* Fill every introductory-offer and plan-term hook. The intro price and spot
+     total follow the live promotion; the "then $X/mo" reversion rate is the
+     standard Monthly plan's price, so even the promotion's fine print tracks
+     the same database everything else reads from. */
+  function renderIntroCopy() {
+    const intro = introView();
+    const introPrice = intro.total;
+
+    const introOpt = $('[data-option-price="intro"]');
+    if (introOpt) {
+      introOpt.textContent = intro.after != null
+        ? `${money(introPrice)}/mo for ${intro.termMonths} mo, then ${money(intro.after)}/mo`
+        : `${money(introPrice)}/mo for ${intro.termMonths} mo`;
+    }
 
     $$('[data-intro-price]').forEach(el => { el.textContent = money(introPrice); });
     $$('[data-intro-total]').forEach(el => { el.textContent = String(spotsState.totalSpots ?? CONFIG.intro.totalSpots); });
-
-    /* The introductory rate is a TERM, not a permanent price. These two hooks
-       disclose that everywhere the offer appears. Both read from CONFIG, so
-       the page can never advertise a term the server is not actually billing. */
     $$('[data-intro-term]').forEach(el => { el.textContent = String(CONFIG.intro.termMonths); });
-    $$('[data-intro-after]').forEach(el => { el.textContent = money(PRICING.intro.after); });
+    if (intro.after != null) $$('[data-intro-after]').forEach(el => { el.textContent = money(intro.after); });
   }
 
   let spotsState = {
@@ -267,9 +362,9 @@
       soldOut: closed || (!unavailable && remaining === 0),
     };
 
-    // The intro price/total shown in the pricing cards must track this same
-    // live data, so re-run that part of renderPricing now that it's known.
-    renderPricing();
+    // The intro price/total shown in the offer must track this same live
+    // data, so refresh the intro copy now that it's known.
+    renderIntroCopy();
 
     $$('[data-spots-remaining]').forEach(el => {
       el.hidden = unavailable;
@@ -420,14 +515,13 @@
     detail.hidden = true;
 
     const { available } = await checkServiceArea(v.zip);
-    const planKey = PLAN_KEY[v.plan];
-    const p = PRICING[planKey];
+    const p = viewForPlan(v.plan);
 
     $('[data-review="community"]').textContent = v.community || '—';
     $('[data-review="address"]').textContent =
       [v.street, v.unit, v.zip].filter(Boolean).join(', ') || '—';
     $('[data-review="plan"]').textContent = p
-      ? `${v.plan} — ${money(p.total)}`
+      ? `${p.name} — ${money(p.total)}`
       : (v.plan || '—');
     $('[data-review="startDate"]').textContent = v.startDate || '—';
 
@@ -440,23 +534,24 @@
 
   function renderPaymentStep() {
     const v = values();
-    const planKey = PLAN_KEY[v.plan];
-    const p = PRICING[planKey];
+    const p = viewForPlan(v.plan);
+    const months = p ? Math.round(p.months) : 0;
     $('[data-review="total"]').textContent = p ? money(p.total) : 'Custom quote';
     $('[data-review="planSummary"]').textContent = p
-      ? `${v.plan} plan · ${p.months === 1 ? 'billed monthly' : `covers ${p.months} months`} · ${CONFIG.schedule.perWeek} pickups per week`
+      ? `${p.name} plan · ${months <= 1 ? 'billed monthly' : `covers ${months} months`} · ${CONFIG.schedule.perWeek} pickups per week`
       : 'A team member will contact you with community-wide pricing.';
 
     // Say plainly that this recurs - a subscription should never be a surprise.
     const renewal = $('[data-review="renewal"]');
     if (renewal) {
-      const period = p && p.months === 1 ? 'month' : p ? `${p.months} months` : null;
+      const period = p && months <= 1 ? 'month' : p ? `${months} months` : null;
       // The introductory plan is a TERM, so "at $18 until you cancel" would be
       // a lie on the one screen where the customer is about to be charged.
       renewal.textContent = !p ? ''
-        : planKey === 'intro'
+        : p.isIntro
           ? `Renews automatically every month at ${money(p.total)} for ${p.termMonths} months, `
-            + `then ${money(p.after)} per month until you cancel. Cancel anytime.`
+            + (p.after != null ? `then ${money(p.after)} per month until you cancel. ` : 'until you cancel. ')
+            + 'Cancel anytime.'
           : `Renews automatically every ${period} at ${money(p.total)} until you cancel. Cancel anytime.`;
     }
 
@@ -535,11 +630,12 @@
   if (form) {
     form.addEventListener('submit', (e) => e.preventDefault());
 
-    $$('.plan-option input').forEach(input => {
-      input.addEventListener('change', () => {
-        $$('.plan-option').forEach(l => l.classList.toggle('is-selected', $('input', l).checked));
-        showError('plan', false);
-      });
+    // Delegated: the standard plan options are rendered dynamically, so bind
+    // once on the form rather than per-input.
+    form.addEventListener('change', (e) => {
+      if (!e.target.matches('input[name="plan"]')) return;
+      $$('.plan-option').forEach(l => l.classList.toggle('is-selected', $('input', l)?.checked));
+      showError('plan', false);
     });
 
     $('[data-step-next]').addEventListener('click', async () => {
@@ -577,9 +673,10 @@
     });
   });
 
-  // Pricing-card buttons
-  $$('.choose-plan').forEach(btn => {
-    btn.addEventListener('click', () => goToSignup(btn.dataset.plan));
+  // Pricing-card buttons (delegated: the cards are rendered dynamically).
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.choose-plan');
+    if (btn) goToSignup(btn.dataset.plan);
   });
 
   /* ============================================================
@@ -624,9 +721,17 @@
 
   /* ---------- boot ---------- */
   renderSchedule();
-  renderPricing();
   (async () => {
-    await renderSpots();
+    // Plans are the source of truth, so load them first, then render every
+    // surface that depends on them: the pricing cards, the signup options, and
+    // the introductory offer's fine print (its reversion rate is the Monthly
+    // plan's price).
+    apiPlans = await fetchPublicPlans();
+    planByCode = buildPlanViews(apiPlans);
+    renderPlanCards();
+    renderSignupOptions();
+    renderIntroCopy();
+    await renderSpots();   // refreshes intro copy once live spot data is known
     if (shouldShowPromo()) setTimeout(openPromo, CONFIG.intro.popupDelayMs);
   })();
 })();

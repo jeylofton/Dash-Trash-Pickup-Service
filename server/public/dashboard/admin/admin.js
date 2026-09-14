@@ -2085,11 +2085,29 @@ const PLAN_STATUS_PILL = { draft: '', active: 'ok', inactive: 'warn', archived: 
 let planCache = [];
 let editingPlanId = null;
 
+const PLAN_COLS = ['Plan', 'Price', 'Billing frequency', 'Customer available', 'Status', 'Customers', ''];
+// Distinct loading / empty / error states so a failed request never looks like
+// an empty page — the production symptom this feature had to make visible.
+const planStatusRow = (msg) =>
+  `<tbody><tr><td colspan="${PLAN_COLS.length}" class="empty">${esc(msg)}</td></tr></tbody>`;
+
 async function loadPlans() {
-  const { plans } = await api('/api/admin/plans');
+  const tbl = $('#planTable');
+  tbl.innerHTML = planStatusRow('Loading plans…');
+  let plans;
+  try {
+    ({ plans } = await api('/api/admin/plans'));
+  } catch (err) {
+    planCache = [];
+    tbl.innerHTML = planStatusRow(`Unable to load subscription plans. ${err.message || 'Please try again.'}`);
+    return;
+  }
   planCache = plans;
-  $('#planTable').innerHTML = table(
-    ['Plan', 'Price', 'Billing frequency', 'Customer available', 'Status', 'Customers', ''],
+  if (!plans.length) {
+    tbl.innerHTML = planStatusRow('No subscription plans have been created yet. Use “New plan” to add one.');
+    return;
+  }
+  tbl.innerHTML = table(PLAN_COLS,
     plans.map(p => `<tr>
       <td><strong>${esc(p.name)}</strong>${p.label ? ` <span class="pill accent">${esc(p.label)}</span>` : ''}
         <br /><span class="muted small">${esc(p.code)}</span></td>

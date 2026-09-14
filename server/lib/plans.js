@@ -11,8 +11,40 @@
    ============================================================ */
 
 import { one, all, run, tx } from '../db/index.js';
-import { slugCode } from './billing.js';
+import { slugCode, frequencyLabel, perLabel } from './billing.js';
 import { setting } from './permissions.js';
+
+/* ============================================================
+   The public plan feed. The marketing homepage and the Start Service
+   signup read this — the SAME table the admin manages — so pricing has
+   one source of truth and an admin edit flows everywhere with no code
+   change. Only plans a visitor may actually buy are exposed: active AND
+   customer-available, and never the intro promotion row (that is a
+   coupon, surfaced separately). Ordered by the admin's display_order.
+   ============================================================ */
+export function listPublicPlans() {
+  // Advertised prices reflect any due scheduled change, exactly as the
+  // admin list does, so the public price is never a step behind.
+  applyDuePriceChanges();
+  return all(`SELECT * FROM plans
+               WHERE status = 'active' AND customer_available = 1 AND is_intro = 0
+               ORDER BY display_order, id`)
+    .map(p => ({
+      id: p.id,
+      code: p.code,
+      name: p.name,
+      description: p.description,
+      priceCents: p.price_cents,
+      price: p.price_cents / 100,
+      currency: p.currency,
+      intervalUnit: p.interval_unit,
+      intervalCount: p.interval_count,
+      frequency: frequencyLabel(p.interval_unit, p.interval_count),
+      perLabel: perLabel(p.interval_unit, p.interval_count),
+      label: p.label,
+      displayOrder: p.display_order,
+    }));
+}
 
 /** A code not already used by another plan. */
 export function uniqueCode(base) {

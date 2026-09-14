@@ -211,49 +211,12 @@
           </div>
         </div>
 
-        <div class="plan-grid">
-          <article class="plan">
-            <h3>Monthly</h3>
-            <div class="term">Pay one month at a time</div>
-            <div class="price"><span data-price="monthly">&mdash;</span> <small>/ month</small></div>
-            <div class="price-sub" data-priceNote="monthly"></div>
-            <ul>
-              <li>2 pickups per week</li>
-              <li>Doorstep trash collection</li>
-              <li>Monthly recurring billing</li>
-              <li>Cancel or change anytime</li>
-            </ul>
-            <button class="btn btn-outline choose-plan" data-plan="Monthly">Choose Monthly</button>
-          </article>
-
-          <article class="plan featured">
-            <div class="popular">Best Value</div>
-            <h3>Quarterly</h3>
-            <div class="term">Pay every 3 months</div>
-            <div class="price"><span data-price="quarterly">&mdash;</span> <small>/ quarter</small></div>
-            <div class="price-sub" data-priceNote="quarterly"></div>
-            <ul>
-              <li>2 pickups per week</li>
-              <li>Doorstep trash collection</li>
-              <li>One payment every 3 months</li>
-              <li data-discount="quarterly">Quarterly billing discount</li>
-            </ul>
-            <button class="btn btn-primary choose-plan" data-plan="Quarterly">Choose Quarterly</button>
-          </article>
-
-          <article class="plan">
-            <h3>Annual</h3>
-            <div class="term">Pay once for the year</div>
-            <div class="price"><span data-price="annual">&mdash;</span> <small>/ year</small></div>
-            <div class="price-sub" data-priceNote="annual"></div>
-            <ul>
-              <li>2 pickups per week</li>
-              <li>Doorstep trash collection</li>
-              <li>Single annual payment</li>
-              <li data-discount="annual">Annual billing discount</li>
-            </ul>
-            <button class="btn btn-outline choose-plan" data-plan="Annual">Choose Annual</button>
-          </article>
+        <!-- Plan cards are rendered by scripts.js from /api/subscription-plans/public
+             (the SAME records Admin -> Subscription Plans manages), so name,
+             price, billing frequency, label, and order all come from the
+             database — there is no hard-coded pricing here. -->
+        <div class="plan-grid" data-plan-grid>
+          <p class="plan-grid-status" data-plan-grid-status>Loading plans&hellip;</p>
         </div>
         <p class="fine-print">
           <span data-schedule-note-long>Standard pickup is Tuesday and Thursday. Pickup days may vary by community or service area.</span>
@@ -367,27 +330,11 @@
                     <span class="plan-option-price" data-option-price="intro"></span>
                   </span>
                 </label>
-                <label class="plan-option">
-                  <input type="radio" name="plan" value="Monthly" hidden />
-                  <span class="plan-option-body">
-                    <span class="plan-option-name">Monthly</span>
-                    <span class="plan-option-price" data-option-price="monthly"></span>
-                  </span>
-                </label>
-                <label class="plan-option">
-                  <input type="radio" name="plan" value="Quarterly" hidden />
-                  <span class="plan-option-body">
-                    <span class="plan-option-name">Quarterly</span>
-                    <span class="plan-option-price" data-option-price="quarterly"></span>
-                  </span>
-                </label>
-                <label class="plan-option">
-                  <input type="radio" name="plan" value="Annual" hidden />
-                  <span class="plan-option-body">
-                    <span class="plan-option-name">Annual</span>
-                    <span class="plan-option-price" data-option-price="annual"></span>
-                  </span>
-                </label>
+                <!-- Standard plan options are rendered here by scripts.js from
+                     /api/subscription-plans/public, so the signup choices are
+                     always exactly the active, customer-available plans Admin
+                     configured — in the admin's display order. -->
+                <span data-standard-plans style="display: contents"></span>
                 <label class="plan-option">
                   <input type="radio" name="plan" value="Community-Wide Pricing" hidden />
                   <span class="plan-option-body">

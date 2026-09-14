@@ -18,8 +18,8 @@ import { enrol } from './lib/signup.js';
 import { payments, providerName } from './lib/payments/index.js';
 import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles } from './db/migrate_admin.js';
 import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
-import { migratePlans } from './db/migrate_plans.js';
-import { applyDuePriceChanges } from './lib/plans.js';
+import { migratePlans, ensureDefaultPlans } from './db/migrate_plans.js';
+import { applyDuePriceChanges, listPublicPlans } from './lib/plans.js';
 import { seedFreshInstall } from './db/seed.js';
 import { introCoupon } from './lib/coupons.js';
 import { attachUser, requirePasswordCurrent } from './lib/rbac.js';
@@ -149,6 +149,20 @@ app.get('/api/config', (req, res) => {
 // website, support contacts, address). Never the internal email/phone.
 app.get('/api/branding', (req, res) => {
   res.json(publicBranding());
+});
+
+// The public plan feed the marketing homepage and the Start Service signup
+// render from — the SAME plans the admin manages (routes/plans.js), so there
+// is one source of truth and an admin price/label/order edit flows to every
+// customer-facing surface with no code change. Only active, customer-available,
+// non-intro plans are exposed. See lib/plans.js#listPublicPlans.
+app.get('/api/subscription-plans/public', (req, res) => {
+  try {
+    res.json({ plans: listPublicPlans() });
+  } catch (err) {
+    console.error('[public-plans]', err);
+    res.status(500).json({ error: 'Could not load plans.' });
+  }
 });
 
 app.get('/api/intro-spots', async (req, res) => {
@@ -371,6 +385,20 @@ if (shouldListen) {
     }
   } catch (e) {
     console.error('  seed-on-boot failed:', e.message);
+  }
+
+  // Guarantee the advertised plan records exist. Runs after the fresh-install
+  // seed (which populates plans on a truly-new DB) and only acts when the plans
+  // table is empty, so it backfills a database that predates the plans feature
+  // — where users already exist and the seed above no-ops — without ever
+  // touching an admin's edited plans. This is the Hostinger fix: it makes
+  // Admin -> Subscription Plans (and the public site) read real, editable
+  // records instead of coming up blank. Guarded so a failure never stops boot.
+  try {
+    const planChanges = ensureDefaultPlans();
+    if (planChanges.length) planChanges.forEach(c => console.log('  plans:', c));
+  } catch (e) {
+    console.error('  ensure-default-plans failed:', e.message);
   }
 
   purgeExpiredSessions();

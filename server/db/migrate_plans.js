@@ -76,3 +76,56 @@ export function migratePlans() {
 
   return changes;
 }
+
+/* ============================================================
+   The advertised default plans. These are REAL, editable records — the
+   single source of truth every customer-facing surface reads from — not
+   frontend copy. The set matches what the marketing site shows: three
+   selectable plans plus the inactive Introductory promotion row.
+
+   [code, name, unit, count, price_cents, status, available, order, label, is_intro, description]
+   ============================================================ */
+export const DEFAULT_PLANS = [
+  ['Monthly',      'Monthly',           'month', 1,  2800, 'active',   1, 1, null,         0, 'Pay one month at a time'],
+  ['Quarterly',    'Quarterly',         'month', 3,  7400, 'active',   1, 2, 'Best Value', 0, 'Pay every 3 months'],
+  ['Annual',       'Annual',            'year',  1, 27600, 'active',   1, 3, null,         0, 'Pay once for the year'],
+  // A real record so the launch coupon and signup path can reference it,
+  // but never selectable: the intro rate is a promotion on Monthly.
+  ['Introductory', 'Introductory Rate', 'month', 1,  1800, 'inactive', 0, 4, null,         1, null],
+];
+
+/* ============================================================
+   Guarantee the deployment has its plan records. Runs on every boot but
+   only ever acts when the plans table is EMPTY, so:
+
+     - a brand-new database that the fresh-install seed already populated
+       is left untouched (the seed ran first), and
+     - a database that predates the plans feature — users already exist,
+       so the fresh-install seed no-ops and never seeds plans — is
+       backfilled with the advertised set, which is exactly the Hostinger
+       case where Admin -> Subscription Plans came up blank.
+
+   Never overwrites or "resets" an existing plan: once any plan exists,
+   the admin owns the table and this is a no-op, so an edited price is
+   never clobbered on the next restart. Returns a list of change notes.
+   ============================================================ */
+export function ensureDefaultPlans() {
+  if (one(`SELECT id FROM plans LIMIT 1`)) return [];   // admin owns the table
+
+  const insert = db.prepare(`
+    INSERT INTO plans (code, name, interval_unit, interval_count, price_cents,
+                       status, customer_available, display_order, label, is_intro,
+                       description, provider_plan_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'demo')`);
+  db.exec('BEGIN');
+  try {
+    for (const [code, name, unit, count, cents, status, avail, order, label, intro, desc] of DEFAULT_PLANS) {
+      insert.run(code, name, unit, count, cents, status, avail, order, label, intro, desc);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return [`seeded ${DEFAULT_PLANS.length} default subscription plans (empty plans table)`];
+}

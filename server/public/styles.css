@@ -274,6 +274,7 @@ section { padding: 96px 0; }
 /* the eyebrow needs to lift off the dark pricing panel */
 .eyebrow-light { color: #f3a06d; }
 .plan-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; }
+.plan-grid-status { grid-column: 1 / -1; text-align: center; color: #aeb6bf; padding: 24px 0; }
 .plan {
   position: relative;
   background: #22272e;
