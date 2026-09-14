@@ -219,7 +219,11 @@ app.post('/api/checkout', rateLimit, async (req, res) => {
 /* ---------- Dashboard (authenticated) ---------- */
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SITE_ROOT = join(HERE, '..');
+// The static site lives inside the server package (server/public) so the app
+// is fully self-contained: a host can set its deploy root to server/ and still
+// get index.html, the dashboard, and all assets. Nothing is served from the
+// repo root, so there is no "deploy the whole repo" requirement.
+const SITE_ROOT = join(HERE, 'public');
 
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Dash Trash Pickup - marketing site + Express backend. Deploys as one app: the server (in server/) serves the static site from the repo root, so a host must deploy the WHOLE repo, not just server/.",
+  "description": "Dash Trash Pickup - marketing site + Express backend. Deploys as one app: the server (in server/) serves the static site from server/public, so a host can deploy either the whole repo or just server/ as its root.",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
