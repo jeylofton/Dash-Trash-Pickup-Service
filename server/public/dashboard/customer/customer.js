@@ -53,7 +53,7 @@ async function loadPlan() {
   $('#currentPlan').innerHTML = current ? `
     <h2>${esc(current.name)} ${account.account.isIntro ? '<span class="pill intro">Introductory rate</span>' : ''}</h2>
     <p class="stat-value" style="color:var(--orange-dark)">${money(current.lockedPrice ?? current.price)}
-      <span class="small muted">/ ${current.intervalMonths === 1 ? 'month' : current.intervalMonths + ' months'}</span></p>
+      <span class="small muted">${current.perLabel}</span></p>
     ${current.afterPrice ? `<p class="small">then ${money(current.afterPrice)}/mo after ${current.promoPeriodsRemaining} more billing period${current.promoPeriodsRemaining === 1 ? '' : 's'}.</p>` : ''}
     ${account.account.isIntro ? `<p class="small">Your promotional price is locked in and will not change
       when standard pricing changes.</p>` : ''}`
@@ -61,8 +61,7 @@ async function loadPlan() {
 
   $('#planOptions').innerHTML = plans.filter(p => !p.isCurrent).map(p => `
     <div class="row" style="align-items:center;border-bottom:1px solid var(--line);padding:10px 0">
-      <div><strong>${esc(p.name)}</strong><div class="muted small">${money(p.price)} every ${
-        p.intervalMonths === 1 ? 'month' : p.intervalMonths + ' months'}</div></div>
+      <div><strong>${esc(p.name)}</strong><div class="muted small">${money(p.price)} ${p.perLabel}</div></div>
       <div style="flex:0 0 auto"><button class="btn" data-plan="${esc(p.code)}">Switch</button></div>
     </div>`).join('') || '<p class="muted small">No other plans available.</p>';
 
