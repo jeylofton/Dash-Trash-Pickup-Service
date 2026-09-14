@@ -1,4 +1,4 @@
-import { api, $, $$, esc, money, fmtDate, fmtTime, statusPill, ISSUE_LABELS, mountShell, wireTabs } from '/dashboard/dash.js';
+import { api, $, $$, esc, money, fmtDate, fmtTime, statusPill, ISSUE_LABELS, mountShell, wireTabs, wireNavGroups } from '/dashboard/dash.js';
 import { lineChart, barChart, statusChip, SERIES } from '/dashboard/charts.js';
 import { guardForm, anyDirty, renderDeleteControl, lifecycleControl,
          createSection, confirmDiscard, toast } from '/dashboard/dash.js';
@@ -1457,6 +1457,9 @@ wireTabs(async (name) => {
      freshly populated <select> is not mistaken for an unsaved edit. */
   CREATE_CARDS.forEach(sel => createGuards.get(sel)?.snapshot());
 });
+
+/* Dropdown open/close for the consolidated top nav (presentational only). */
+wireNavGroups();
 
 let searchTimer;
 $('#custSearch').addEventListener('input', () => {

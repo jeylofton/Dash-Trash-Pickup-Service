@@ -21,23 +21,59 @@
     </div>
   </header>
 
-  <nav class="tabs">
+  <nav class="tabs" id="adminTabs">
+    <button type="button" class="nav-toggle" aria-label="Open menu" aria-expanded="false" aria-controls="adminTabs">
+      <span class="nav-toggle-bars" aria-hidden="true"></span>
+      <span class="nav-toggle-label">Dashboard</span>
+      <span class="nav-caret" aria-hidden="true">▾</span>
+    </button>
     <button data-tab="dashboard">Dashboard</button>
-    <button data-tab="customers">Customers</button>
-    <button data-tab="communities">Communities</button>
-    <button data-tab="routes">Routes</button>
-    <button data-tab="employees">Employees</button>
-    <button data-tab="accounts">Accounts</button>
-    <button data-tab="roles">Roles</button>
-    <button data-tab="pickups">Pickups</button>
-    <button data-tab="payments">Payments</button>
-    <button data-tab="financials">Financials</button>
-    <button data-tab="expenses">Expenses</button>
-    <button data-tab="payroll">Payroll</button>
-    <button data-tab="coupons">Coupons</button>
-    <button data-tab="plans" data-perm="plans.view" hidden>Subscription Plans</button>
-    <button data-tab="credits">Service Credits</button>
-    <button data-tab="reports">Reports</button>
+
+    <div class="nav-group">
+      <button type="button" class="nav-group-trigger" aria-haspopup="true" aria-expanded="false">Customers &amp; Communities <span class="nav-caret" aria-hidden="true">▾</span></button>
+      <div class="nav-group-menu">
+        <button data-tab="customers">Customers</button>
+        <button data-tab="communities">Communities</button>
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <button type="button" class="nav-group-trigger" aria-haspopup="true" aria-expanded="false">Routes &amp; Pickups <span class="nav-caret" aria-hidden="true">▾</span></button>
+      <div class="nav-group-menu">
+        <button data-tab="routes">Routes</button>
+        <button data-tab="pickups">Pickups</button>
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <button type="button" class="nav-group-trigger" aria-haspopup="true" aria-expanded="false">Team &amp; Access <span class="nav-caret" aria-hidden="true">▾</span></button>
+      <div class="nav-group-menu">
+        <button data-tab="employees">Employees</button>
+        <button data-tab="accounts">Accounts</button>
+        <button data-tab="roles">Roles</button>
+        <button data-tab="reports">Reports</button>
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <button type="button" class="nav-group-trigger" aria-haspopup="true" aria-expanded="false">Finance &amp; Billing <span class="nav-caret" aria-hidden="true">▾</span></button>
+      <div class="nav-group-menu">
+        <button data-tab="payments">Payments</button>
+        <button data-tab="financials">Financials</button>
+        <button data-tab="expenses">Expenses</button>
+        <button data-tab="payroll">Payroll</button>
+        <button data-tab="credits">Service Credits</button>
+      </div>
+    </div>
+
+    <div class="nav-group">
+      <button type="button" class="nav-group-trigger" aria-haspopup="true" aria-expanded="false">Plans &amp; Coupons <span class="nav-caret" aria-hidden="true">▾</span></button>
+      <div class="nav-group-menu">
+        <button data-tab="plans" data-perm="plans.view" hidden>Subscription Plans</button>
+        <button data-tab="coupons">Coupons</button>
+      </div>
+    </div>
+
     <button data-tab="settings" data-perm="system.settings.view" hidden>System Settings</button>
   </nav>
 

@@ -59,6 +59,72 @@ table { border-collapse:collapse; width:100%; }
 }
 .tabs button[aria-selected="true"] { color:var(--ink); border-bottom-color:var(--orange); }
 
+/* grouped nav (dropdowns) */
+/* The consolidated nav wraps instead of scrolling, so absolute submenus are
+   never clipped by the bar's overflow. Scoped so other dashboards are untouched. */
+.tabs:has(.nav-group) { overflow:visible; flex-wrap:wrap; }
+.nav-group { position:relative; display:flex; align-items:stretch; }
+.nav-group-trigger { display:inline-flex; align-items:center; gap:5px; }
+.nav-caret { font-size:.65rem; line-height:1; transition:transform .15s ease; }
+.nav-group.open .nav-caret { transform:rotate(180deg); }
+
+/* parent tab shows active when one of its child pages is selected */
+.nav-group:has(button[aria-selected="true"]) > .nav-group-trigger {
+  color:var(--ink); border-bottom-color:var(--orange);
+}
+
+.nav-group-menu {
+  display:none; flex-direction:column; min-width:210px;
+  position:absolute; top:100%; left:0;
+  background:var(--white); border:1px solid var(--line);
+  border-top:0; border-radius:0 0 var(--radius) var(--radius);
+  box-shadow:var(--shadow); padding:6px; z-index:40;
+}
+.nav-group.open > .nav-group-menu { display:flex; }
+@media (hover:hover) {
+  .nav-group:hover > .nav-group-menu { display:flex; }
+}
+
+.nav-group-menu button {
+  display:block; width:100%; text-align:left;
+  border:0; border-radius:8px; padding:9px 12px;
+}
+.nav-group-menu button:hover { background:var(--sand); }
+.nav-group-menu button[aria-selected="true"] {
+  color:var(--ink); background:rgba(241,84,31,.1);
+}
+
+/* hamburger toggle — desktop hides it entirely, the full bar shows instead */
+.nav-toggle { display:none; }
+.nav-toggle-bars, .nav-toggle-bars::before, .nav-toggle-bars::after {
+  display:block; width:18px; height:2px; background:currentColor; border-radius:2px;
+}
+.nav-toggle-bars { position:relative; }
+.nav-toggle-bars::before, .nav-toggle-bars::after { content:''; position:absolute; left:0; }
+.nav-toggle-bars::before { top:-6px; }
+.nav-toggle-bars::after  { top:6px; }
+
+/* mobile/tablet: groups stack and menus expand inline (accordion) */
+@media (max-width:768px) {
+  .tabs:has(.nav-group) { flex-direction:column; }
+  .tabs:has(.nav-group) .nav-group { flex-direction:column; flex:1 1 100%; }
+  .nav-group-menu {
+    position:static; min-width:0; border:0; box-shadow:none;
+    border-radius:0; padding:0 0 0 14px;
+  }
+
+  /* show the hamburger; collapse the list behind it */
+  .nav-toggle {
+    display:flex; align-items:center; gap:12px; width:100%;
+    background:none; border:0; padding:13px 4px; cursor:pointer;
+    font-weight:800; font-size:.95rem; color:var(--ink);
+  }
+  .nav-toggle .nav-caret { margin-left:auto; }
+  .tabs.nav-open .nav-toggle .nav-caret { transform:rotate(180deg); }
+  /* every nav item except the toggle is hidden until the menu is opened */
+  .tabs:has(.nav-toggle):not(.nav-open) > :not(.nav-toggle) { display:none; }
+}
+
 main { padding:clamp(16px,3vw,28px); max-width:1400px; margin-inline:auto; }
 
 /* ---------- cards & stats ---------- */

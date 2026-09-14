@@ -95,6 +95,79 @@ export function wireTabs(onChange) {
   return show;
 }
 
+/**
+ * Dropdown behaviour for grouped nav items (.nav-group).
+ * Purely presentational: opens/closes the submenu, one at a time.
+ * Desktop also reveals on hover via CSS; this adds click/tap + close.
+ */
+export function wireNavGroups(root = document) {
+  const groups = $$('.nav-group', root);
+  const nav = $('.tabs', root);
+  const toggle = $('.nav-toggle', root);
+  if (!groups.length && !toggle) return;
+
+  const closeAll = (except) => groups.forEach(g => {
+    if (g === except) return;
+    g.classList.remove('open');
+    g.querySelector('.nav-group-trigger')?.setAttribute('aria-expanded', 'false');
+  });
+
+  groups.forEach(group => {
+    const trigger = group.querySelector('.nav-group-trigger');
+    trigger?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !group.classList.contains('open');
+      closeAll(group);
+      group.classList.toggle('open', willOpen);
+      trigger.setAttribute('aria-expanded', String(willOpen));
+    });
+    /* Choosing a page inside the menu closes the dropdown. */
+    group.querySelectorAll('.nav-group-menu [data-tab]').forEach(item =>
+      item.addEventListener('click', () => closeAll()));
+  });
+
+  /* Clicking away, or pressing Escape, collapses any open menu. */
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.nav-group')) closeAll();
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeAll(); });
+
+  /* Mobile hamburger: the whole bar collapses to a single row that shows the
+     current section; tapping it drops the full list of options down. */
+  if (toggle && nav) {
+    const label = toggle.querySelector('.nav-toggle-label');
+    const collapse = () => {
+      nav.classList.remove('nav-open');
+      toggle.setAttribute('aria-expanded', 'false');
+      closeAll();
+    };
+    /* Keep the collapsed label in step with whichever page is selected —
+       the parent section name for grouped pages, else the tab's own name. */
+    const syncLabel = () => {
+      if (!label) return;
+      const sel = $$('[data-tab]', nav).find(b => b.getAttribute('aria-selected') === 'true');
+      if (!sel) return;
+      const grp = sel.closest('.nav-group');
+      label.textContent = grp
+        ? grp.querySelector('.nav-group-trigger').textContent.trim().replace(/\s*▾\s*$/, '')
+        : sel.textContent.trim();
+    };
+
+    toggle.addEventListener('click', () => {
+      const open = !nav.classList.contains('nav-open');
+      nav.classList.toggle('nav-open', open);
+      toggle.setAttribute('aria-expanded', String(open));
+      if (!open) closeAll();
+    });
+    /* Picking any page collapses the menu back to the compact bar. */
+    $$('[data-tab]', nav).forEach(b => {
+      b.addEventListener('click', collapse);
+      new MutationObserver(syncLabel).observe(b, { attributes:true, attributeFilter:['aria-selected'] });
+    });
+    syncLabel();
+  }
+}
+
 /* ============================================================
    Form guarding: Cancel restores, and leaving warns.
    ============================================================ */
