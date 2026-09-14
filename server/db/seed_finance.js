@@ -1,5 +1,6 @@
 /* Demo payroll + expenses so the financial dashboard has real numbers. */
 import { db, migrate, one, all, run, tx } from './index.js';
+import { monthsEquivalent } from '../lib/billing.js';
 
 migrate();
 
@@ -106,12 +107,12 @@ tx(() => {
      revenue look like a single month's billing. Real subscriptions bill
      every period, so generate them. */
   run(`DELETE FROM payments`);
-  const subs = all(`SELECT s.*, p.interval_months FROM subscriptions s
+  const subs = all(`SELECT s.*, p.interval_unit, p.interval_count FROM subscriptions s
                       JOIN plans p ON p.id = s.plan_id
                      WHERE s.status IN ('active','past_due')`);
   let issued = 0;
   for (const sub of subs) {
-    const cycleDays = 30 * sub.interval_months;
+    const cycleDays = Math.round(monthsEquivalent(sub.interval_unit, sub.interval_count) * 30);
     for (let back = 0; back <= 84; back += cycleDays) {
       // a small share of charges fail or sit unpaid, as they would in reality
       const roll = (sub.id + back) % 17;
