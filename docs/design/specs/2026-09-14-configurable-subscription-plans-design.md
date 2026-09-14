@@ -52,7 +52,7 @@ canonical billing interval is `interval_unit` + `interval_count`:
 | `internal_notes` | TEXT | admin-only |
 | `price_cents` | INTEGER NOT NULL | admin controls it; never auto-calculated |
 | `currency` | TEXT NOT NULL DEFAULT 'USD' | |
-| `interval_unit` | TEXT NOT NULL CHECK IN ('day','week','month','year') | |
+| `interval_unit` | TEXT NOT NULL CHECK IN ('week','month','year') | |
 | `interval_count` | INTEGER NOT NULL CHECK (> 0) | "every N units" |
 | `customer_available` | INTEGER NOT NULL DEFAULT 0 | section 6 |
 | `status` | TEXT NOT NULL DEFAULT 'draft' CHECK IN ('draft','active','inactive','archived') | replaces `active` boolean |
@@ -75,7 +75,7 @@ are no-ops.
 **`interval_months` is retired from code.** A new `lib/billing.js` centralizes
 the two operations that used it:
 - `monthsEquivalent(unit, count)` → fractional months, for MRR normalization
-  (week = count×7/30.436, day = count/30.436, month = count, year = count×12).
+  (week = count×7/30.436, month = count, year = count×12).
 - `addInterval(dateISO, unit, count)` → next-billing date, replacing
   `setMonth(+interval_months)` and the `+N days` SQL in the customer plan change.
 - `frequencyLabel(unit, count)` → display string ("weekly", "every 2 weeks",
@@ -86,7 +86,20 @@ All current `interval_months` call sites (`routes/admin.js` MRR,
 `routes/customer.js` `/subscription`, `/plans`, `/plan/change`, `lib/signup.js`
 next-billing) switch to these helpers.
 
-### 2. Price changes — section 11 (chosen approach: record + apply at effective date)
+### 2. Price changes — section 11 (record + grace period, then switch)
+
+**The rule (per owner decision):**
+- **New customers** always pay the plan's current *advertised* price at the
+  moment their subscription starts — this is exactly how signup already works
+  (price locks per-subscription at signup). Changing a plan's price updates the
+  advertised price immediately, so anyone who signs up afterward gets it.
+- **Existing customers** keep their current price for a **grace period
+  (~90 days by default)**, then switch to the new price. The grace length is a
+  configurable setting, not a hard-coded number.
+
+New setting (seeded into `app_settings`, editable in System Settings):
+`plan.price_change_grace_days` = `'90'` — "How long existing subscribers keep
+their old price after a plan price change before switching to the new one."
 
 New table `plan_price_changes`:
 
@@ -96,28 +109,37 @@ New table `plan_price_changes`:
 | `plan_id` → plans(id) | |
 | `old_price_cents`, `new_price_cents` | |
 | `applies_to` CHECK IN ('new','existing_and_new') | |
-| `effective_date` | YYYY-MM-DD |
+| `effective_date` | YYYY-MM-DD — when EXISTING customers switch |
 | `reason` | text, optional |
 | `status` CHECK IN ('scheduled','applied','cancelled') DEFAULT 'scheduled' | |
 | `created_by` → users(id), `created_at`, `applied_at` | |
 
+Flow when an admin changes a price:
+- The plan's advertised `price_cents` updates **immediately** (new customers get
+  the new price at signup from that point on). `updated_at` is set.
+- If `applies_to='new'`: no `plan_price_changes` row is needed; existing
+  subscribers keep their `locked_price_cents` unchanged (indefinitely).
+- If `applies_to='existing_and_new'`: a `plan_price_changes` row is written with
+  `effective_date` defaulting to **today + `plan.price_change_grace_days`**. The
+  admin may push it later, but not silently earlier than a sensible minimum; the
+  form pre-fills the +90-day date and shows it plainly, so existing pricing is
+  never changed without an explicit, dated decision.
+
 Function `applyDuePriceChanges()` (in `lib/plans.js`), idempotent and cheap
 (`WHERE status='scheduled' AND effective_date <= date('now')`), runs on boot
-(from `migrate()` / server start) and at the top of admin + customer plan reads:
-
-- Sets `plans.price_cents = new_price_cents`, `updated_at = now`.
-- If `applies_to = 'existing_and_new'`: updates `locked_price_cents` for that
-  plan's live subscriptions (`status IN ('active','past_due','paused')`), writes
-  an `audit_log` row per change. **`payments` history is never touched** (section
-  10). Promo/intro subscriptions keep their frozen `promo_price_cents` until it
-  expires, then revert to the new standard `locked_price_cents`.
+(from `migrate()` / server start) and at the top of admin + customer plan reads.
+When a row comes due it:
+- Updates `locked_price_cents = new_price_cents` for that plan's live
+  subscriptions (`status IN ('active','past_due','paused')`) whose locked price is
+  still the old price, and writes an `audit_log` row per change. **`payments`
+  history is never touched** (section 10). Promo/intro subscriptions keep their
+  frozen `promo_price_cents` until it expires, then revert to the new standard
+  `locked_price_cents`.
 - Marks the row `applied`, sets `applied_at`.
 
-`applies_to='new'` (the default) only changes the plan's own price going forward.
-Editing a plan's price directly in the Edit form is treated as an immediate
-`new`-scope change (no existing subscriber is touched). "Existing + new" is only
-reachable through an explicit price-change action that **requires an effective
-date**, so existing pricing is never silently changed.
+Editing a plan's price directly in the Edit form is the `new`-scope path (new
+customers only). Switching existing customers is the explicit effective-dated
+action above, defaulting to the 90-day grace.
 
 ### 3. Lifecycle & management — sections 2, 9
 
@@ -205,11 +227,21 @@ redemption logic.
 
 ### 9. Seed data
 
-`db/seed.js` updates the three seeded plans to the new columns (month × 1/3/12,
-`status='active'`, `customer_available=1`, sensible `display_order`), and (for
-demonstration) may add one sub-monthly example (e.g. a Weekly plan) so the
-non-monthly path is exercised out of the box. Reference-data seeding only —
-no change to how demo customers/subscriptions are generated.
+`db/seed.js` updates the seeded plans to the new columns
+(`status='active'`, `customer_available=1`, sensible `display_order`) and adds
+two non-monthly examples so those paths are exercised out of the box:
+
+| code | name | interval | example price |
+|---|---|---|---|
+| Weekly | Weekly | week × 1 | $8 / week |
+| Monthly | Monthly | month × 1 | (existing) |
+| Quarterly | Quarterly | month × 3 | (existing) |
+| BiAnnual | Bi-Annual | month × 6 | $155 / 6 months |
+| Annual | Annual | year × 1 | (existing) |
+
+The `plan.price_change_grace_days` setting (default `'90'`) is seeded into
+`app_settings`. Reference-data seeding only — no change to how demo
+customers/subscriptions are generated.
 
 ## Testing (node:test, existing style under `server/test/`)
 
@@ -221,10 +253,12 @@ no change to how demo customers/subscriptions are generated.
    rejected server-side.
 4. **No delete with history** — a plan with a subscription cannot be
    hard-deleted; a fresh draft can.
-5. **Price change** — a scheduled `existing_and_new` change applies at its
-   effective date, updates live subscriptions' `locked_price_cents`, leaves
-   `payments` history untouched, and is idempotent; a `new`-scope change touches
-   no existing subscriber.
+5. **Price change** — a `new`-scope change updates the advertised price
+   immediately and touches no existing subscriber; an `existing_and_new` change
+   defaults its effective date to today + grace days, and once due applies to
+   live subscriptions' `locked_price_cents`, leaves `payments` history untouched,
+   and is idempotent (re-running does not double-apply). Grace default is read
+   from `plan.price_change_grace_days`.
 6. **Customer availability gating** — `/plans` returns only active + available
    plans in `display_order`; a draft/unavailable plan is hidden.
 7. **Coupon eligibility intact** — a coupon restricted to a plan still validates
