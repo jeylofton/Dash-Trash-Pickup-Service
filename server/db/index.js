@@ -50,9 +50,15 @@ export function migrate() {
   // by foreign key and their history must stay readable. Naturally
   // idempotent (a no-op once already inactive), guarded the same way as
   // addColumn() so repeated boots never do redundant writes.
-  const introPlanActive = one(`SELECT active FROM plans WHERE code = 'Introductory'`);
-  if (introPlanActive && introPlanActive.active) {
-    db.exec(`UPDATE plans SET active = 0 WHERE code = 'Introductory'`);
+  // Legacy only: the old plans table had an `active` flag. Deactivating the
+  // Introductory row is now handled in migrate_plans.js against the new
+  // `status` column, so only touch `active` while it still exists.
+  const planCols = db.prepare(`PRAGMA table_info(plans)`).all().map(c => c.name);
+  if (planCols.includes('active')) {
+    const introPlanActive = one(`SELECT active FROM plans WHERE code = 'Introductory'`);
+    if (introPlanActive && introPlanActive.active) {
+      db.exec(`UPDATE plans SET active = 0 WHERE code = 'Introductory'`);
+    }
   }
 }
 
