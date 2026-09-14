@@ -148,6 +148,12 @@ INSERT OR IGNORE INTO permissions (key, category, label, sort_order) VALUES
   ('reports.view','Reports','View reports',100),
   ('reports.export','Reports','Export reports',101),
 
+  ('plans.view','Plans & Billing','View subscription plans',66),
+  ('plans.create','Plans & Billing','Create subscription plans',67),
+  ('plans.edit','Plans & Billing','Edit subscription plans',68),
+  ('plans.status','Plans & Billing','Activate / deactivate plans',69),
+  ('plans.archive','Plans & Billing','Archive plans',70),
+
   ('system.users.manage','System','Manage users',110),
   ('system.roles.manage','System','Manage roles',111),
   ('system.permissions.manage','System','Manage permissions',112),

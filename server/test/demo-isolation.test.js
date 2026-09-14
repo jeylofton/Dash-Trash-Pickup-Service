@@ -20,7 +20,7 @@ const { hashPassword } = await import('../lib/auth.js');
 const { app } = await import('../server.js');
 
 const pw = await hashPassword('Passw0rd99');
-run(`INSERT INTO plans (code,name,interval_months,price_cents,is_intro) VALUES ('Monthly','Monthly',1,2800,0)`);
+run(`INSERT INTO plans (code,name,interval_unit,interval_count,price_cents,is_intro,status,customer_available) VALUES ('Monthly','Monthly','month',1,2800,0,'active',1)`);
 const monthly = one(`SELECT id FROM plans WHERE code='Monthly'`).id;
 const adminId = run(`INSERT INTO users (email,password_hash,role,first_name,last_name)
   VALUES ('owner@t.local',?,'admin','Own','Er')`, pw).lastInsertRowid;

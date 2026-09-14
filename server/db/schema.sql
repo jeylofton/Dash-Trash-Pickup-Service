@@ -121,15 +121,50 @@ CREATE INDEX IF NOT EXISTS idx_service_addr_unit ON service_addresses(unit_id, e
 -- ---------- Billing ----------
 
 CREATE TABLE IF NOT EXISTS plans (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  code            TEXT    NOT NULL UNIQUE,  -- Introductory | Monthly | Quarterly | Annual
-  name            TEXT    NOT NULL,
-  interval_months INTEGER NOT NULL,
-  price_cents     INTEGER NOT NULL,
-  is_intro        INTEGER NOT NULL DEFAULT 0,
-  provider_plan_id TEXT,                    -- 'demo' until a real provider is connected
-  active          INTEGER NOT NULL DEFAULT 1
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  code               TEXT    NOT NULL UNIQUE,   -- Monthly | Quarterly | Annual | Weekly | …
+  name               TEXT    NOT NULL,
+  description        TEXT,
+  internal_notes     TEXT,
+  price_cents        INTEGER NOT NULL,
+  currency           TEXT    NOT NULL DEFAULT 'USD',
+  -- Billing frequency as "every N units". This, not a whole month count,
+  -- is what lets a company bill weekly, biweekly, or bi-annually.
+  interval_unit      TEXT    NOT NULL DEFAULT 'month'
+                       CHECK (interval_unit IN ('week','month','year')),
+  interval_count     INTEGER NOT NULL DEFAULT 1 CHECK (interval_count > 0),
+  customer_available INTEGER NOT NULL DEFAULT 0,   -- may a customer pick it?
+  status             TEXT    NOT NULL DEFAULT 'draft'
+                       CHECK (status IN ('draft','active','inactive','archived')),
+  display_order      INTEGER NOT NULL DEFAULT 0,
+  label              TEXT,                          -- "Most Popular", "Best Value", …
+  is_intro           INTEGER NOT NULL DEFAULT 0,
+  provider_plan_id   TEXT,                          -- 'demo' until a real provider is connected
+  created_at         TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at         TEXT,
+  archived_at        TEXT
 );
+
+-- A pending or applied change to a plan's price. New customers pay the
+-- plan's advertised price at signup; EXISTING customers keep their locked
+-- price until effective_date (default: change date + grace days), then
+-- switch. Applying NEVER rewrites historical payment rows.
+CREATE TABLE IF NOT EXISTS plan_price_changes (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  plan_id          INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+  old_price_cents  INTEGER NOT NULL,
+  new_price_cents  INTEGER NOT NULL,
+  applies_to       TEXT    NOT NULL CHECK (applies_to IN ('new','existing_and_new')),
+  effective_date   TEXT    NOT NULL,           -- when EXISTING customers switch
+  reason           TEXT,
+  status           TEXT    NOT NULL DEFAULT 'scheduled'
+                     CHECK (status IN ('scheduled','applied','cancelled')),
+  created_by       INTEGER REFERENCES users(id),
+  created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+  applied_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_price_changes_due
+  ON plan_price_changes(status, effective_date);
 
 CREATE TABLE IF NOT EXISTS subscriptions (
   id                 INTEGER PRIMARY KEY AUTOINCREMENT,

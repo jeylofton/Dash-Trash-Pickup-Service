@@ -4,6 +4,7 @@ import { requireRole } from '../lib/rbac.js';
 import { audit } from '../lib/audit.js';
 import { hashPassword, passwordProblem } from '../lib/auth.js';
 import { generateServiceDay, serviceDayStats, today, DAY_NAMES } from '../lib/schedule.js';
+import { monthsEquivalent } from '../lib/billing.js';
 
 export const router = Router();
 router.use(requireRole('admin'));          // every route below is admin-only
@@ -43,12 +44,14 @@ router.get('/overview', (req, res) => {
   // A promotional subscription still on its 12-month term bills at
   // promo_price_cents, not locked_price_cents - counting the standard rate
   // here would overstate MRR for every customer currently paying $18.
-  const mrrCents = one(`
-    SELECT COALESCE(SUM(
-      CAST(CASE WHEN s.promo_periods_remaining > 0 THEN s.promo_price_cents ELSE s.locked_price_cents END AS REAL)
-      / p.interval_months), 0) AS c
+  const mrrRows = all(`
+    SELECT p.interval_unit, p.interval_count,
+           CASE WHEN s.promo_periods_remaining > 0 THEN s.promo_price_cents
+                ELSE s.locked_price_cents END AS cents
       FROM subscriptions s JOIN plans p ON p.id = s.plan_id
-     WHERE s.status = 'active' AND s.is_demo=0`).c;
+     WHERE s.status = 'active' AND s.is_demo = 0`);
+  const mrrCents = mrrRows.reduce((sum, r) =>
+    sum + r.cents / monthsEquivalent(r.interval_unit, r.interval_count), 0);
 
   /* Operations picture, not just today's numbers. */
   const photosToday = one(
@@ -190,7 +193,8 @@ router.get('/customers/:id', (req, res) => {
         LEFT JOIN communities com ON com.id = un.community_id
        WHERE sa.customer_id = ? AND sa.end_date IS NULL`, c.id),
     subscription: one(`
-      SELECT s.*, p.code AS plan_code, p.name AS plan_name, p.interval_months
+      SELECT s.*, p.code AS plan_code, p.name AS plan_name,
+             p.interval_unit, p.interval_count
         FROM subscriptions s JOIN plans p ON p.id = s.plan_id
        WHERE s.customer_id = ? AND s.status != 'cancelled'
        ORDER BY s.id DESC LIMIT 1`, c.id),

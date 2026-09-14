@@ -11,6 +11,7 @@ import { payments, providerName } from './payments/index.js';
 import { hashPassword, passwordProblem } from './auth.js';
 import { tx, one, run } from '../db/index.js';
 import { validate as validateCoupon, redeemWithin, introCoupon } from './coupons.js';
+import { addInterval } from './billing.js';
 
 const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
@@ -109,7 +110,7 @@ export async function enrol(input) {
   const isIntroRequest = plan === 'Introductory';
   const planCode = isIntroRequest ? 'Monthly' : plan;
 
-  const planRow = one(`SELECT * FROM plans WHERE code = ? AND active = 1`, planCode);
+  const planRow = one(`SELECT * FROM plans WHERE code = ? AND status = 'active'`, planCode);
   if (!planRow) return { ok: false, error: `No active plan named "${planCode}".` };
 
   const passwordHash = await hashPassword(password);
@@ -257,10 +258,10 @@ export async function enrol(input) {
         ids.paymentId);
 
     if (charge.status === 'paid') {
-      const next = new Date(startDate || Date.now());
-      next.setMonth(next.getMonth() + planRow.interval_months);
+      const nextBilling = addInterval(startDate || new Date().toISOString().slice(0, 10),
+                                      planRow.interval_unit, planRow.interval_count);
       run(`UPDATE subscriptions SET status = 'active', next_billing_date = ?
-            WHERE id = ?`, next.toISOString().slice(0, 10), ids.subscriptionId);
+            WHERE id = ?`, nextBilling, ids.subscriptionId);
 
       // Only a paid charge makes this a serviceable customer - this is the
       // one place customers.status becomes 'active', so an unpaid signup is

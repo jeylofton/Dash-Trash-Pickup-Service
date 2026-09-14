@@ -14,9 +14,10 @@ import assert from 'node:assert/strict';
 process.env.DB_PATH = ':memory:';
 process.env.PAYMENT_PROVIDER = 'demo';
 const { db, migrate, one } = await import('../db/index.js');
+const { monthsEquivalent } = await import('../lib/billing.js');
 migrate();
-db.exec(`INSERT INTO plans (code,name,interval_months,price_cents,is_intro)
-         VALUES ('Monthly','Monthly',1,2800,0)`);
+db.exec(`INSERT INTO plans (code,name,interval_unit,interval_count,price_cents,is_intro,status,customer_available)
+         VALUES ('Monthly','Monthly','month',1,2800,0,'active',1)`);
 db.exec(`INSERT INTO coupons (code,name,discount_type,discount_value,max_redemptions,
                               eligible_customer_type,is_intro,duration_periods)
          VALUES ('DASHLAUNCH','Dash Launch Special','promo_price',1800,100,'new',1,12)`);
@@ -70,11 +71,12 @@ test('MRR counts a promotional subscription at the promotional price', async () 
   assert.equal(r.ok, true);
   assert.equal(r.introApplied, true);
 
-  const mrr = one(`
-    SELECT COALESCE(SUM(
-      CAST(CASE WHEN s.promo_periods_remaining > 0 THEN s.promo_price_cents ELSE s.locked_price_cents END AS REAL)
-      / p.interval_months), 0) AS c
+  const row = one(`
+    SELECT p.interval_unit, p.interval_count,
+           CASE WHEN s.promo_periods_remaining > 0 THEN s.promo_price_cents
+                ELSE s.locked_price_cents END AS cents
       FROM subscriptions s JOIN plans p ON p.id = s.plan_id
      WHERE s.id = ?`, r.subscriptionId);
-  assert.equal(mrr.c, 1800, 'a $18 promotional customer must contribute $18 to MRR, not $28');
+  const mrrCents = row.cents / monthsEquivalent(row.interval_unit, row.interval_count);
+  assert.equal(mrrCents, 1800, 'a $18 promotional customer must contribute $18 to MRR, not $28');
 });

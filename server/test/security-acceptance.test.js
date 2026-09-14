@@ -38,8 +38,8 @@ const { app } = await import('../server.js');  // runs migrations on import
 
 /* ---------- seed ---------- */
 
-run(`INSERT INTO plans (code,name,interval_months,price_cents,is_intro)
-     VALUES ('Monthly','Monthly',1,2800,0)`);
+run(`INSERT INTO plans (code,name,interval_unit,interval_count,price_cents,is_intro,status,customer_available)
+     VALUES ('Monthly','Monthly','month',1,2800,0,'active',1)`);
 
 const PW = 'Passw0rd99';
 const pwHash = await hashPassword(PW);

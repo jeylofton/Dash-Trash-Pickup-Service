@@ -32,7 +32,9 @@ INSERT OR IGNORE INTO app_settings (key, value, description) VALUES
   ('credit.employee_max_cents',        '500',  'Most an employee may credit without approval'),
   ('credit.employee_monthly_cap_cents','5000', 'Most one employee may credit per calendar month'),
   ('credit.per_customer_monthly_cents','2000', 'Most one customer may receive per calendar month'),
-  ('coupon.min_final_price_cents',     '500',  'A discount may never take a price below this');
+  ('coupon.min_final_price_cents',     '500',  'A discount may never take a price below this'),
+  ('plan.price_change_grace_days', '90',
+   'Days an existing subscriber keeps their old price after a plan price change before switching to the new one');
 
 /* ============================================================
    COUPONS — marketing

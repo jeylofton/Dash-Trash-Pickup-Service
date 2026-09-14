@@ -21,11 +21,12 @@ const sections = {
   roles:       createSection({ detail: '#roleDetail' }),
   employees:   createSection({ detail: '#empDetailView', list: '#empListView' }),
   coupons:     createSection({ detail: '#couponDetail' }),
+  plans:       createSection({ detail: '#planDetail' }),
 };
 
 /* The Add/New forms are drafts too: an abandoned one must not be
    waiting, half-filled, the next time the tab is opened. */
-const CREATE_CARDS = ['#newCommCard', '#newRouteCard', '#newRoleCard', '#newEmpCard', '#newCouponForm'];
+const CREATE_CARDS = ['#newCommCard', '#newRouteCard', '#newRoleCard', '#newEmpCard', '#newCouponForm', '#newPlanCard'];
 const createGuards = new Map();
 
 function resetCreateForm(sel) {
@@ -2065,4 +2066,245 @@ api('/api/roles/me/permissions').then(p => {
     const btn = document.querySelector('[data-tab="settings"]');
     if (btn) btn.hidden = false;
   }
+  if (p.all || p.permissions?.['plans.view']) {
+    const btn = document.querySelector('[data-tab="plans"]');
+    if (btn) btn.hidden = false;
+  }
 }).catch(() => {});
+
+/* ============================================================
+   Subscription Plans (Plans & Billing)
+
+   Same page-state contract as everything else: the list opens a
+   record into #planDetail; the create/edit draft lives in the
+   #newPlanCard form and only Save writes; status changes go through
+   the shared lifecycle control; leaving the tab returns to the plain
+   list with nothing selected.
+   ============================================================ */
+const PLAN_STATUS_PILL = { draft: '', active: 'ok', inactive: 'warn', archived: '' };
+let planCache = [];
+let editingPlanId = null;
+
+async function loadPlans() {
+  const { plans } = await api('/api/admin/plans');
+  planCache = plans;
+  $('#planTable').innerHTML = table(
+    ['Plan', 'Price', 'Billing frequency', 'Customer available', 'Status', 'Customers', ''],
+    plans.map(p => `<tr>
+      <td><strong>${esc(p.name)}</strong>${p.label ? ` <span class="pill accent">${esc(p.label)}</span>` : ''}
+        <br /><span class="muted small">${esc(p.code)}</span></td>
+      <td class="num">${money(p.price)}</td>
+      <td class="small">${esc(p.frequency)}</td>
+      <td>${p.customerAvailable ? 'Yes' : '<span class="muted">No</span>'}</td>
+      <td><span class="pill ${PLAN_STATUS_PILL[p.status] ?? ''}">${esc(p.statusLabel)}</span></td>
+      <td class="num">${p.customers}</td>
+      <td><button class="btn small" data-plan="${p.id}">Manage</button></td>
+    </tr>`).join(''));
+  $$('#planTable [data-plan]').forEach(b => b.addEventListener('click', async () => {
+    if (await sections.plans.canSwitchTo(b.dataset.plan)) showPlan(Number(b.dataset.plan));
+  }));
+}
+
+function fillPlanForm(p) {
+  $('#pfName').value = p?.name ?? '';
+  $('#pfPrice').value = p ? p.price : '';
+  $('#pfCount').value = p?.intervalCount ?? 1;
+  $('#pfUnit').value = p?.intervalUnit ?? 'month';
+  $('#pfAvail').value = p?.customerAvailable ? '1' : '0';
+  $('#pfStatus').value = (p?.status && p.status !== 'archived') ? p.status : 'draft';
+  $('#pfOrder').value = p?.displayOrder ?? '';
+  $('#pfLabel').value = p?.label ?? '';
+  $('#pfDesc').value = p?.description ?? '';
+  $('#pfNotes').value = p?.internalNotes ?? '';
+}
+
+function openPlanForm(p) {
+  editingPlanId = p?.id ?? null;
+  $('#planFormTitle').textContent = p ? `Edit plan — ${p.name}` : 'New plan';
+  // Status is only set at creation here; for an existing plan it is changed
+  // through Change status (the lifecycle control), never a plain field edit.
+  const statusWrap = $('#pfStatus').closest('div');
+  if (statusWrap) statusWrap.style.display = p ? 'none' : '';
+  fillPlanForm(p);
+  $('#pfMsg').hidden = true;
+  $('#newPlanCard').hidden = false;
+  createGuards.get('#newPlanCard')?.snapshot();
+  $('#newPlanCard').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+$('#planNew').addEventListener('click', () => openPlanForm(null));
+$('#pfCancel').addEventListener('click', () => { resetCreateForm('#newPlanCard'); editingPlanId = null; });
+
+$('#pfSave').addEventListener('click', async () => {
+  const msg = $('#pfMsg'); msg.hidden = true;
+  if (!$('#pfName').value.trim()) { msg.textContent = 'A plan name is required.'; msg.hidden = false; return; }
+  const body = {
+    name: $('#pfName').value.trim(),
+    priceDollars: $('#pfPrice').value,
+    intervalUnit: $('#pfUnit').value,
+    intervalCount: Number($('#pfCount').value) || 1,
+    customerAvailable: $('#pfAvail').value === '1',
+    displayOrder: $('#pfOrder').value === '' ? undefined : Number($('#pfOrder').value),
+    label: $('#pfLabel').value.trim() || null,
+    description: $('#pfDesc').value.trim() || null,
+    internalNotes: $('#pfNotes').value.trim() || null,
+  };
+  if (editingPlanId == null) body.status = $('#pfStatus').value;
+  try {
+    if (editingPlanId == null) {
+      await api('/api/admin/plans', { method: 'POST', body: JSON.stringify(body) });
+    } else {
+      await api(`/api/admin/plans/${editingPlanId}`, { method: 'PATCH', body: JSON.stringify(body) });
+    }
+    const wasEditing = editingPlanId;
+    resetCreateForm('#newPlanCard');
+    editingPlanId = null;
+    toast('Plan saved.');
+    await loadPlans();
+    if (wasEditing) showPlan(wasEditing);
+  } catch (e) { msg.textContent = e.message; msg.hidden = false; }
+});
+
+async function renderPlanHistory(id) {
+  const { priceChanges } = await api(`/api/admin/plans/${id}`);
+  $('#pcHistory').innerHTML = table(
+    ['Scheduled / effective', 'From', 'To', 'Applies to', 'Status', ''],
+    (priceChanges || []).map(pc => `<tr>
+      <td class="small muted">${esc(pc.effectiveDate)}</td>
+      <td class="num">${money(pc.from)}</td>
+      <td class="num">${money(pc.to)}</td>
+      <td class="small">${pc.appliesTo === 'existing_and_new' ? 'Existing + new' : 'New only'}</td>
+      <td>${esc(pc.status)}</td>
+      <td>${pc.status === 'scheduled'
+        ? `<button class="btn small" data-cancel-pc="${pc.id}">Cancel</button>` : ''}</td>
+    </tr>`).join(''));
+  // Only a still-scheduled change can be cancelled; the server re-checks.
+  $$('#pcHistory [data-cancel-pc]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Cancel this scheduled price change? Existing customers keep their current price.')) return;
+    try {
+      await api(`/api/admin/plans/${id}/price-change/${b.dataset.cancelPc}/cancel`, { method: 'POST' });
+      toast('Scheduled price change cancelled.');
+      renderPlanHistory(id);
+    } catch (e) { toast(e.message, 'error'); }
+  }));
+}
+
+function showPlan(id) {
+  const p = planCache.find(x => x.id === id);
+  if (!p) return;
+  const box = $('#planDetail');
+  box.hidden = false;
+  sections.plans.select(id);
+  box.innerHTML = `
+    <div class="detail-bar"><button class="btn-back" id="planBack">&larr; Back to Plans</button></div>
+    <h2>${esc(p.name)} <span class="pill ${PLAN_STATUS_PILL[p.status] ?? ''}">${esc(p.statusLabel)}</span>
+      ${p.label ? `<span class="pill accent">${esc(p.label)}</span>` : ''}</h2>
+    <p class="muted small">${money(p.price)} ${esc(p.perLabel)} · ${esc(p.frequency)} ·
+      ${p.customers} customer(s) · ${p.customerAvailable ? 'available to customers' : 'not customer-available'} ·
+      code ${esc(p.code)}</p>
+    ${p.description ? `<p class="small">${esc(p.description)}</p>` : ''}
+    <div class="form-actions-bar" style="margin-bottom:14px">
+      <button class="btn btn-primary" id="planEditBtn">Edit details</button>
+      <button class="btn" id="planDupBtn">Duplicate</button>
+    </div>
+
+    <div class="card" style="background:var(--sand)">
+      <h3>Change price</h3>
+      <p class="small muted">New customers get the new price immediately. Existing customers keep their
+        current price until the effective date (defaults to ~90 days out).</p>
+      <div class="row">
+        <div><label for="pcPrice">New price ($)</label><input id="pcPrice" type="number" step="0.01" min="0" value="${p.price}" /></div>
+        <div><label for="pcApplies">Applies to</label>
+          <select id="pcApplies">
+            <option value="new">New customers only</option>
+            <option value="existing_and_new">Existing + new customers</option>
+          </select></div>
+        <div id="pcEffectiveWrap" style="display:none"><label for="pcEffective">Existing customers switch on</label>
+          <input id="pcEffective" type="date" /></div>
+        <div><label for="pcReason">Reason (optional)</label><input id="pcReason" /></div>
+      </div>
+      <p class="msg" id="pcMsg" hidden></p>
+      <div class="form-actions-bar">
+        <button class="btn btn-primary" id="pcSave">Apply price change</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Change status</h3>
+      <div id="planLcZone"></div>
+    </div>
+
+    <div class="card">
+      <h3>Price change history</h3>
+      <div class="table-wrap"><table id="pcHistory"></table></div>
+    </div>`;
+
+  renderPlanHistory(id);
+
+  $('#planBack').addEventListener('click', async () => {
+    if (await sections.plans.close()) await loadPlans();
+  });
+  $('#planEditBtn').addEventListener('click', () => openPlanForm(p));
+  $('#planDupBtn').addEventListener('click', async () => {
+    await api(`/api/admin/plans/${id}/duplicate`, { method: 'POST' });
+    toast('Plan duplicated as a draft.');
+    if (await sections.plans.close({ force: true })) await loadPlans();
+  });
+
+  const applies = $('#pcApplies'), effWrap = $('#pcEffectiveWrap'), eff = $('#pcEffective');
+  const plus90 = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+  applies.addEventListener('change', () => {
+    const existing = applies.value === 'existing_and_new';
+    effWrap.style.display = existing ? '' : 'none';
+    if (existing && !eff.value) eff.value = plus90;
+  });
+  $('#pcSave').addEventListener('click', async () => {
+    const msg = $('#pcMsg'); msg.hidden = true;
+    const body = {
+      newPriceDollars: $('#pcPrice').value,
+      appliesTo: applies.value,
+      reason: $('#pcReason').value.trim() || null,
+    };
+    if (applies.value === 'existing_and_new') body.effectiveDate = eff.value || plus90;
+    try {
+      const res = await api(`/api/admin/plans/${id}/price-change`, { method: 'POST', body: JSON.stringify(body) });
+      toast(res.effectiveDate
+        ? `Price change scheduled — existing customers switch on ${res.effectiveDate}.`
+        : 'Price updated for new customers.');
+      await loadPlans();
+      showPlan(id);
+    } catch (e) { msg.textContent = e.message; msg.hidden = false; }
+  });
+
+  lifecycleControl('#planLcZone', {
+    actionsUrl: `/api/admin/plans/${id}/actions`,
+    submitUrl: `/api/admin/plans/${id}/action`,
+    label: 'plan',
+    onDone: async (res, action) => {
+      if (action === 'closed') return;
+      toast(action === '__delete__' ? 'Plan deleted.' : (res?.message || 'Status updated.'));
+      if (await sections.plans.close({ force: true })) await loadPlans();
+    },
+  });
+
+  box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+Object.assign(loaders, { plans: loadPlans });
+createGuards.set('#newPlanCard', guardForm('#newPlanCard'));
+
+/* Populate plan filter dropdowns from the configured plans so new plans
+   appear automatically (no hard-coded plan names). The customer-list filter
+   matches on plan CODE. A user without plans.view simply keeps "All". */
+async function fillPlanFilters() {
+  const sel = $('#custPlan');
+  if (!sel) return;
+  try {
+    const { plans } = await api('/api/admin/plans');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">All</option>' +
+      plans.map(p => `<option value="${esc(p.code)}">${esc(p.name)}</option>`).join('');
+    sel.value = current;
+  } catch { /* no permission or offline: leave the default "All" */ }
+}
+fillPlanFilters();

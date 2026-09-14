@@ -18,8 +18,8 @@ process.env.DB_PATH = ':memory:';
 process.env.PAYMENT_PROVIDER = 'demo';
 const { db, migrate, one, run } = await import('../db/index.js');
 migrate();
-db.exec(`INSERT INTO plans (code,name,interval_months,price_cents,is_intro)
-         VALUES ('Monthly','Monthly',1,2800,0)`);
+db.exec(`INSERT INTO plans (code,name,interval_unit,interval_count,price_cents,is_intro,status,customer_available)
+         VALUES ('Monthly','Monthly','month',1,2800,0,'active',1)`);
 const { enrol } = await import('../lib/signup.js');
 
 const base = {
