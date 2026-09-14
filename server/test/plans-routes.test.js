@@ -61,6 +61,25 @@ test('create -> list -> edit -> lifecycle -> price-change flow', async () => {
   assert.ok(one(`SELECT id FROM plan_price_changes WHERE plan_id = ?`, id));
 });
 
+test('price-change rejects a past effective date and cancel flips a scheduled change', async () => {
+  const created = await api('POST', '', { name: 'CancelMe', priceDollars: 10,
+    intervalUnit: 'month', intervalCount: 1, status: 'active' });
+  const id = created.json.plan.id;
+
+  const past = await api('POST', `/${id}/price-change`, { newPriceDollars: 15,
+    appliesTo: 'existing_and_new', effectiveDate: '2020-01-01' });
+  assert.equal(past.status, 400);
+
+  const scheduled = await api('POST', `/${id}/price-change`, { newPriceDollars: 15,
+    appliesTo: 'existing_and_new', effectiveDate: '2999-01-01' });
+  assert.equal(scheduled.status, 200);
+  const pcId = one(`SELECT id FROM plan_price_changes WHERE plan_id = ? ORDER BY id DESC`, id).id;
+
+  const cancelled = await api('POST', `/${id}/price-change/${pcId}/cancel`);
+  assert.equal(cancelled.status, 200);
+  assert.equal(one(`SELECT status FROM plan_price_changes WHERE id = ?`, pcId).status, 'cancelled');
+});
+
 test('an unknown action is rejected', async () => {
   const created = await api('POST', '', { name: 'X', priceDollars: 5,
     intervalUnit: 'month', intervalCount: 1, status: 'draft' });

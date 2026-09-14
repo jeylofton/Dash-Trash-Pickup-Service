@@ -100,3 +100,73 @@ test('existing_and_new applies to live subscriptions once due, not before', () =
   // Idempotent: a second run does nothing new.
   assert.equal(plans.applyDuePriceChanges(), 0);
 });
+
+test('schedulePriceChange with no effectiveDate defaults to today + grace days', () => {
+  const { id } = plans.createPlan({ name: 'GraceDefault', priceCents: 2000,
+    intervalUnit: 'month', intervalCount: 1, status: 'active' }, 1);
+  const expected = new Date(Date.now() + 90 * 86400000).toISOString().slice(0, 10);
+  const out = plans.schedulePriceChange(id, { newPriceCents: 2200, appliesTo: 'existing_and_new' }, 1);
+  assert.equal(out.effectiveDate, expected);
+  const row = one(`SELECT effective_date FROM plan_price_changes WHERE id = ?`, out.id);
+  assert.equal(row.effective_date, expected);
+});
+
+test('layered price changes do not strand a subscriber at an intermediate price', () => {
+  const { id } = plans.createPlan({ name: 'Layered', priceCents: 2000,
+    intervalUnit: 'month', intervalCount: 1, status: 'active' }, 1);
+  const custId = seedCustomerOnPlan(id, 2000);
+  // A 'new'-scope change bumps the advertised price but leaves the subscriber alone.
+  plans.schedulePriceChange(id, { newPriceCents: 2500, appliesTo: 'new' }, 1);
+  assert.equal(one(`SELECT locked_price_cents FROM subscriptions WHERE customer_id = ?`, custId).locked_price_cents, 2000);
+  // Now an existing_and_new change to 3000, due immediately.
+  const pc2 = plans.schedulePriceChange(id, { newPriceCents: 3000, appliesTo: 'existing_and_new',
+    effectiveDate: '2999-01-01' }, 1);
+  run(`UPDATE plan_price_changes SET effective_date = '2020-01-01' WHERE id = ?`, pc2.id);
+  plans.applyDuePriceChanges();
+  assert.equal(one(`SELECT locked_price_cents FROM subscriptions WHERE customer_id = ?`, custId).locked_price_cents, 3000);
+});
+
+test('cancelPriceChange stops a scheduled change from ever applying', () => {
+  const { id } = plans.createPlan({ name: 'Cancellable', priceCents: 2000,
+    intervalUnit: 'month', intervalCount: 1, status: 'active' }, 1);
+  const custId = seedCustomerOnPlan(id, 2000);
+  const pc = plans.schedulePriceChange(id, { newPriceCents: 2800, appliesTo: 'existing_and_new',
+    effectiveDate: '2999-01-01' }, 1);
+  plans.cancelPriceChange(id, pc.id);
+  assert.equal(one(`SELECT status FROM plan_price_changes WHERE id = ?`, pc.id).status, 'cancelled');
+
+  // Even once "due," a cancelled row must not apply.
+  run(`UPDATE plan_price_changes SET effective_date = '2020-01-01' WHERE id = ?`, pc.id);
+  plans.applyDuePriceChanges();
+  assert.equal(one(`SELECT locked_price_cents FROM subscriptions WHERE customer_id = ?`, custId).locked_price_cents, 2000);
+
+  // Cancelling a non-scheduled (already cancelled) row throws 409.
+  assert.throws(() => plans.cancelPriceChange(id, pc.id), (err) => err.status === 409);
+});
+
+test('planDeletability: applied price-change history blocks delete; scheduled/cancelled do not', () => {
+  const { id: appliedId } = plans.createPlan({ name: 'AppliedHistory', priceCents: 2000,
+    intervalUnit: 'month', intervalCount: 1, status: 'active' }, 1);
+  const pc = plans.schedulePriceChange(appliedId, { newPriceCents: 2500, appliesTo: 'existing_and_new',
+    effectiveDate: '2020-01-01' }, 1);
+  plans.applyDuePriceChanges();
+  assert.equal(one(`SELECT status FROM plan_price_changes WHERE id = ?`, pc.id).status, 'applied');
+  const del = plans.planDeletability(appliedId);
+  assert.equal(del.deletable, false);
+  assert.throws(() => plans.deletePlan(appliedId));
+
+  const { id: scheduledId } = plans.createPlan({ name: 'ScheduledOnly', priceCents: 2000,
+    intervalUnit: 'month', intervalCount: 1, status: 'active' }, 1);
+  plans.schedulePriceChange(scheduledId, { newPriceCents: 2500, appliesTo: 'existing_and_new',
+    effectiveDate: '2999-01-01' }, 1);
+  assert.equal(plans.planDeletability(scheduledId).deletable, true);
+  plans.deletePlan(scheduledId);
+
+  const { id: cancelledId } = plans.createPlan({ name: 'CancelledOnly', priceCents: 2000,
+    intervalUnit: 'month', intervalCount: 1, status: 'active' }, 1);
+  const pc2 = plans.schedulePriceChange(cancelledId, { newPriceCents: 2500, appliesTo: 'existing_and_new',
+    effectiveDate: '2999-01-01' }, 1);
+  plans.cancelPriceChange(cancelledId, pc2.id);
+  assert.equal(plans.planDeletability(cancelledId).deletable, true);
+  plans.deletePlan(cancelledId);
+});

@@ -87,7 +87,19 @@ export function planDeletability(id) {
   const coup = one(`SELECT COUNT(*) AS n FROM coupon_plans WHERE plan_id = ?`, id).n;
   if (subs > 0) return { deletable: false, reason: `${subs} subscription(s) reference this plan. Archive it instead.` };
   if (coup > 0) return { deletable: false, reason: `A coupon targets this plan. Archive it instead.` };
+  const appliedChanges = one(`SELECT COUNT(*) AS n FROM plan_price_changes
+                               WHERE plan_id = ? AND status = 'applied'`, id).n;
+  if (appliedChanges > 0) return { deletable: false, reason: `This plan has applied price-change history. Archive it instead.` };
   return { deletable: true, reason: null };
+}
+
+/** Cancel a still-scheduled price change. No-op-safe: only 'scheduled' rows cancel. */
+export function cancelPriceChange(planId, pcId) {
+  const res = run(`UPDATE plan_price_changes SET status = 'cancelled'
+                    WHERE id = ? AND plan_id = ? AND status = 'scheduled'`, pcId, planId);
+  if (!res.changes) {
+    throw Object.assign(new Error('That scheduled price change no longer exists or cannot be cancelled.'), { status: 409 });
+  }
 }
 
 export function deletePlan(id) {
@@ -133,18 +145,22 @@ export function applyDuePriceChanges() {
   let applied = 0;
   for (const pc of due) {
     tx(() => {
-      // Only subscriptions still on the OLD price and still live. Promo
-      // subscriptions keep their frozen promo_price_cents; their eventual
-      // reversion reads the (now-updated) locked_price_cents.
-      const subs = all(`SELECT id FROM subscriptions
-                         WHERE plan_id = ? AND locked_price_cents = ?
-                           AND status IN ('active','past_due','paused')`,
-                        pc.plan_id, pc.old_price_cents);
+      // Every live subscription on this plan moves to the new standard rate,
+      // whatever price it was previously locked at (a prior 'new'-scope change
+      // may have left some subscribers on an intermediate price). Matching on
+      // "not already at the new price" — rather than the change's captured old
+      // price — keeps those subscribers from being stranded and makes a re-run
+      // a no-op. A promo subscriber keeps their frozen promo_price_cents; only
+      // their reversion rate (locked_price_cents) updates, as the promo expects.
+      const subs = all(`SELECT id, locked_price_cents FROM subscriptions
+                         WHERE plan_id = ? AND status IN ('active','past_due','paused')
+                           AND locked_price_cents != ?`,
+                        pc.plan_id, pc.new_price_cents);
       for (const s of subs) {
         run(`UPDATE subscriptions SET locked_price_cents = ? WHERE id = ?`, pc.new_price_cents, s.id);
         run(`INSERT INTO audit_log (action, entity_type, entity_id, detail)
              VALUES ('subscription.reprice', 'subscription', ?, ?)`,
-          s.id, JSON.stringify({ planId: pc.plan_id, from: pc.old_price_cents, to: pc.new_price_cents, priceChangeId: pc.id }));
+          s.id, JSON.stringify({ planId: pc.plan_id, from: s.locked_price_cents, to: pc.new_price_cents, priceChangeId: pc.id }));
       }
       run(`UPDATE plan_price_changes SET status = 'applied', applied_at = datetime('now') WHERE id = ?`, pc.id);
     });

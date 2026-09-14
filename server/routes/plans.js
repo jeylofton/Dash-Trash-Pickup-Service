@@ -14,6 +14,7 @@ import { frequencyLabel, perLabel, INTERVAL_UNITS } from '../lib/billing.js';
 import {
   createPlan, updatePlan, duplicatePlan, deletePlan,
   planDeletability, planCustomerCount, schedulePriceChange, applyDuePriceChanges,
+  cancelPriceChange,
 } from '../lib/plans.js';
 
 export const router = Router();
@@ -79,6 +80,9 @@ router.post('/', requirePermission('plans.create'), (req, res) => {
   if (priceCents == null || priceCents < 0) return res.status(400).json({ error: 'A price is required.' });
   const bad = validIntervals(b);
   if (bad) return res.status(400).json({ error: bad });
+  if (b.status && !['draft', 'active', 'inactive'].includes(b.status)) {
+    return res.status(400).json({ error: 'Status must be draft, active, or inactive.' });
+  }
   const { id } = createPlan({
     name: b.name, description: b.description, internalNotes: b.internalNotes,
     priceCents, intervalUnit: b.intervalUnit || 'month', intervalCount: Number(b.intervalCount) || 1,
@@ -171,6 +175,10 @@ router.post('/:id/price-change', requirePermission('plans.edit'), (req, res) => 
   if (!['new', 'existing_and_new'].includes(b.appliesTo)) {
     return res.status(400).json({ error: 'appliesTo must be "new" or "existing_and_new".' });
   }
+  if (b.appliesTo === 'existing_and_new' && b.effectiveDate &&
+      b.effectiveDate < new Date().toISOString().slice(0, 10)) {
+    return res.status(400).json({ error: 'The effective date cannot be in the past.' });
+  }
   const out = schedulePriceChange(p.id, {
     newPriceCents, appliesTo: b.appliesTo, effectiveDate: b.effectiveDate || null, reason: b.reason,
   }, req.user.id);
@@ -178,4 +186,17 @@ router.post('/:id/price-change', requirePermission('plans.edit'), (req, res) => 
     detail: { to: money(newPriceCents), appliesTo: b.appliesTo, effectiveDate: out.effectiveDate } });
   res.json({ ok: true, effectiveDate: out.effectiveDate,
              plan: shape(one(`SELECT * FROM plans WHERE id = ?`, p.id)) });
+});
+
+router.post('/:id/price-change/:pcid/cancel', requirePermission('plans.edit'), (req, res) => {
+  const p = one(`SELECT id FROM plans WHERE id = ?`, req.params.id);
+  if (!p) return res.status(404).json({ error: 'Not found.' });
+  try {
+    cancelPriceChange(p.id, Number(req.params.pcid));
+  } catch (err) {
+    return res.status(err.status || 409).json({ error: err.message });
+  }
+  audit(req, 'plan.price_change_cancelled', { entityType: 'plan', entityId: p.id,
+    detail: { priceChangeId: Number(req.params.pcid) } });
+  res.json({ ok: true });
 });

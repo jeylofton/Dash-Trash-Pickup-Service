@@ -5,6 +5,7 @@ import { audit } from '../lib/audit.js';
 import { payments as provider, providerName } from '../lib/payments/index.js';
 import { DAY_NAMES, today } from '../lib/schedule.js';
 import { addInterval, frequencyLabel, perLabel } from '../lib/billing.js';
+import { applyDuePriceChanges } from '../lib/plans.js';
 
 export const router = Router();
 router.use(requireRole('customer'), requireCustomer);
@@ -69,6 +70,7 @@ function serviceNotice(address) {
 }
 
 router.get('/account', (req, res) => {
+  applyDuePriceChanges();
   const address = myAddress(req.customer.id);
   const days = myScheduleDays(address);
   const notice = serviceNotice(address);
@@ -126,6 +128,7 @@ router.patch('/profile', (req, res) => {
 /* ---------- Plans and payments ---------- */
 
 router.get('/plans', (req, res) => {
+  applyDuePriceChanges();
   const current = one(`
     SELECT s.*, p.code FROM subscriptions s JOIN plans p ON p.id = s.plan_id
      WHERE s.customer_id = ? AND s.status != 'cancelled' ORDER BY s.id DESC LIMIT 1`, req.customer.id);
