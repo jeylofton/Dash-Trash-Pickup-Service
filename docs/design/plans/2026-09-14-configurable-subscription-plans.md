@@ -1295,18 +1295,19 @@ git commit -m "feat(plans): admin CRUD + lifecycle + price-change routes, permis
 
 ---
 
-## Task 6: Retire `interval_months` in existing call sites
+## Task 6: Retire legacy plans columns (`interval_months` + `active`) across admin, signup, finance seed, and test fixtures
 
 **Files:**
 - Modify: `server/routes/admin.js:47-50` (MRR)
-- Modify: `server/lib/signup.js` (next-billing computation)
-- Modify: `server/routes/customer.js` (`/account` subscription block; `/plan/change` next-billing)
+- Modify: `server/lib/signup.js` (next-billing computation AND the `active = 1` plan lookup)
+- Modify: `server/db/seed_finance.js` (billing-cycle length from interval)
+- Modify: the 8 test fixtures that `INSERT INTO plans (...interval_months...)` — see Step 3e for the full list
 - Test: `server/test/interval-months-retired.test.js`
 
 **Interfaces:**
-- Consumes: `lib/billing.js` (`monthsEquivalent`, `addInterval`, `frequencyLabel`, `perLabel`).
+- Consumes: `lib/billing.js` (`monthsEquivalent`, `addInterval`).
 
-**Context:** `plans.interval_months` no longer exists. Every query selecting it or arithmetic using it must switch to `interval_unit`/`interval_count` via `lib/billing.js`.
+**Context:** The `plans` table rebuild (Task 2) removed BOTH `interval_months` and `active`. This task makes every remaining producer/consumer consistent with the new `interval_unit`/`interval_count` + `status` columns, and updates the test fixtures that seed plans with the old columns, so the FULL suite goes green. `customer.js`'s plan queries are intentionally NOT in this task — they are consolidated into Task 7 (which owns every `customer.js` plan edit) to avoid two tasks editing the same file.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1322,17 +1323,25 @@ import { dirname, join } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (p) => readFileSync(join(HERE, '..', p), 'utf8');
 
-test('no server code still references plans.interval_months', () => {
-  for (const f of ['routes/admin.js', 'routes/customer.js', 'lib/signup.js']) {
+test('admin/signup/finance-seed no longer reference plans.interval_months', () => {
+  // customer.js is covered by Task 7; billing.js/migrate_plans.js legitimately
+  // mention the word (a comment / the legacy backfill source) so are excluded.
+  for (const f of ['routes/admin.js', 'lib/signup.js', 'db/seed_finance.js']) {
     assert.ok(!/interval_months/.test(read(f)), `${f} still references interval_months`);
   }
+});
+
+test('signup.js selects a billable plan by status, not the removed active column', () => {
+  const src = read('lib/signup.js');
+  assert.ok(!/plans WHERE code = \? AND active = 1/.test(src),
+    'signup.js still filters plans on the removed `active` column');
 });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `node --test server/test/interval-months-retired.test.js`
-Expected: FAIL — the three files still contain `interval_months`.
+Expected: FAIL — those files still contain `interval_months` / `active = 1`.
 
 - [ ] **Step 3a: `server/routes/admin.js` MRR**
 
@@ -1355,11 +1364,11 @@ Replace the SQL-division MRR query (lines ~47-50) with a JS computation that avo
 
 (Ensure `all` is imported in `admin.js`; it already imports db helpers — confirm and add `all` to the import if missing.)
 
-- [ ] **Step 3b: `server/lib/signup.js` next-billing**
+- [ ] **Step 3b: `server/lib/signup.js` — next-billing AND plan lookup**
 
 Add import: `import { addInterval } from './billing.js';`
 
-Replace the block that does `next.setMonth(next.getMonth() + planRow.interval_months)` with:
+(1) Replace the block that does `next.setMonth(next.getMonth() + planRow.interval_months)` with:
 
 ```js
       const nextBilling = addInterval(startDate || new Date().toISOString().slice(0, 10),
@@ -1370,71 +1379,116 @@ Replace the block that does `next.setMonth(next.getMonth() + planRow.interval_mo
 
 (The `planRow` is already `SELECT * FROM plans`, so `interval_unit`/`interval_count` are present. Remove the now-unused `next` Date construction.)
 
-- [ ] **Step 3c: `server/routes/customer.js` `/account`**
-
-Add import at top: `import { addInterval, frequencyLabel, perLabel } from '../lib/billing.js';`
-
-In the `/account` subscription query, replace `p.interval_months` with `p.interval_unit, p.interval_count`. In the response `subscription` object, replace `intervalMonths: subscription.interval_months` with:
+(2) The plan lookup currently filters on the removed `active` column:
 
 ```js
-      intervalUnit: subscription.interval_unit,
-      intervalCount: subscription.interval_count,
-      frequency: frequencyLabel(subscription.interval_unit, subscription.interval_count),
-      perLabel: perLabel(subscription.interval_unit, subscription.interval_count),
+  const planRow = one(`SELECT * FROM plans WHERE code = ? AND active = 1`, planCode);
 ```
 
-- [ ] **Step 3d: `server/routes/customer.js` `/plan/change` next-billing**
-
-Replace the `INSERT INTO subscriptions (... next_billing_date) VALUES (..., date('now','+' || ? || ' days'))` with an `addInterval`-derived date computed in JS:
+Change it to filter on `status` instead:
 
 ```js
-    const nextBilling = addInterval(new Date().toISOString().slice(0, 10),
-                                    plan.interval_unit, plan.interval_count);
-    run(`INSERT INTO subscriptions (customer_id, plan_id, locked_price_cents, status, provider,
-                                    started_at, next_billing_date)
-         VALUES (?, ?, ?, 'pending', ?, date('now'), ?)`,
-        req.customer.id, plan.id, plan.price_cents, providerName, nextBilling);
+  const planRow = one(`SELECT * FROM plans WHERE code = ? AND status = 'active'`, planCode);
 ```
 
-(The `plan` row is `SELECT * FROM plans …` so it already has `interval_unit`/`interval_count`.)
+- [ ] **Step 3c: `server/db/seed_finance.js` — billing-cycle length**
+
+This file computes a billing cycle in days from `interval_months` (around line 109-114):
+
+```js
+  const subs = all(`SELECT s.*, p.interval_months FROM subscriptions s
+                    JOIN plans p ON p.id = s.plan_id ...`);
+  ...
+    const cycleDays = 30 * sub.interval_months;
+```
+
+Add import: `import { monthsEquivalent } from '../lib/billing.js';`
+Select the new columns and derive the cycle length from them:
+
+```js
+  const subs = all(`SELECT s.*, p.interval_unit, p.interval_count FROM subscriptions s
+                    JOIN plans p ON p.id = s.plan_id ...`);   // keep the rest of the WHERE unchanged
+  ...
+    const cycleDays = Math.round(monthsEquivalent(sub.interval_unit, sub.interval_count) * 30);
+```
+
+(Keep every other part of the query and loop as-is; only the selected columns and the `cycleDays` line change. `30 * months` is preserved for month plans since `monthsEquivalent('month', n) === n`.)
+
+- [ ] **Step 3d: (removed — customer.js edits live in Task 7)**
+
+- [ ] **Step 3e: Update test fixtures that seed plans with the removed columns**
+
+Eight test files insert plans using the old `(interval_months, ... )` shape and now fail at setup. Update each `INSERT INTO plans (...)` to the new columns, making the plan usable where the test expects a billable plan (`status='active'`, and `customer_available=1` if a customer path reads it). The files:
+
+```
+server/test/atomic-redemption.test.js
+server/test/intro-redemption.test.js
+server/test/final-review-fixes.test.js
+server/test/public-intro-signup.test.js
+server/test/signup-email-reuse-guard.test.js
+server/test/security-acceptance.test.js
+server/test/demo-isolation.test.js
+server/test/signup.test.js
+```
+
+Mechanical transform for each plan insert, e.g.:
+
+```js
+// BEFORE
+db.exec(`INSERT INTO plans (code,name,interval_months,price_cents,is_intro)
+         VALUES ('Monthly','Monthly',1,2800,0)`);
+// AFTER
+db.exec(`INSERT INTO plans (code,name,interval_unit,interval_count,price_cents,is_intro,status,customer_available)
+         VALUES ('Monthly','Monthly','month',1,2800,0,'active',1)`);
+```
+
+Map old month counts to `('month', N)`: `1→month,1`; `3→month,3`; `12→year,1` (or `month,12` — either is correct, prefer `year,1` for Annual). Preserve each row's existing `code`, `name`, `price_cents`, and `is_intro` values exactly. Do not change any other part of these test files. After editing, run each file to confirm it passes.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `node --test server/test/interval-months-retired.test.js`
 Expected: PASS.
 Run: `npm test`
-Expected: full suite green (signup/customer/admin tests still pass with the new columns).
+Expected: FULL suite green — the 8 previously-failing fixtures now pass, and no new failures. (Customer.js `/plans` and `/plan/change` still reference `active`/`interval_months` at this point, but no existing test exercises those DB paths; Task 7 fixes them. If `npm test` shows a failure traceable to a customer.js plan query, note it — it means a test does exercise that path and Task 7 must run next.)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add server/routes/admin.js server/lib/signup.js server/routes/customer.js server/test/interval-months-retired.test.js
-git commit -m "refactor(billing): retire interval_months in favor of billing.js helpers"
+git add server/routes/admin.js server/lib/signup.js server/db/seed_finance.js server/test/
+git commit -m "refactor(plans): retire interval_months + active in admin, signup, finance seed, and fixtures"
 ```
 
 ---
 
-## Task 7: Customer plan availability + ordering
+## Task 7: Customer plan queries — availability, ordering, labels, next-billing
 
 **Files:**
-- Modify: `server/routes/customer.js` `/plans`
+- Modify: `server/routes/customer.js` (`/account` subscription block; `/plans` offering; `/plan/change` lookup + next-billing) — this task owns ALL customer.js plan edits
 - Test: `server/test/customer-plan-availability.test.js`
 
 **Interfaces:**
-- Consumes: `lib/billing.js` (`frequencyLabel`, `perLabel`).
+- Consumes: `lib/billing.js` (`addInterval`, `frequencyLabel`, `perLabel`).
+
+**Context:** After Task 6, every plan producer/consumer is on the new columns EXCEPT `customer.js`, which still references `interval_months` (in `/account`) and the removed `active` column (in `/plans` and `/plan/change`). This task migrates all three and adds availability gating + ordering.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `server/test/customer-plan-availability.test.js`. It exercises the `/plans` query logic by asserting on which plans a customer would be offered. Because `/plans` needs an authenticated customer, test the underlying filter by calling the DB the same way the route does:
+Create `server/test/customer-plan-availability.test.js`. It guards (a) the offering filter and (b) that `customer.js` no longer references the removed columns:
 
 ```js
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 
 process.env.DB_PATH = ':memory:';
 const { migrate, all, run } = await import('../db/index.js');
 const { migratePlans } = await import('../db/migrate_plans.js');
 migrate(); migratePlans();
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const read = (p) => readFileSync(join(HERE, '..', p), 'utf8');
 
 function mk(code, status, avail, order) {
   run(`INSERT INTO plans (code,name,price_cents,interval_unit,interval_count,status,customer_available,display_order)
@@ -1454,14 +1508,34 @@ test('only active + customer_available plans are offered, in display_order', () 
                         ORDER BY display_order, id`).map(r => r.code);
   assert.deepEqual(offered, ['A', 'B']);
 });
+
+test('customer.js no longer references interval_months or the removed active column', () => {
+  const src = read('routes/customer.js');
+  assert.ok(!/interval_months/.test(src), 'customer.js still references interval_months');
+  assert.ok(!/plans WHERE active = 1|FROM plans WHERE code = \? AND \(active = 1/.test(src),
+    'customer.js still filters plans on the removed active column');
+});
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `node --test server/test/customer-plan-availability.test.js`
-Expected: PASS for the mirror query already — but this test guards the intended behavior. If it passes immediately, proceed to wire the route (Step 3) so the ROUTE matches the guarded query.
+Expected: FAIL — the second test fails because `customer.js` still references `interval_months`/`active`.
 
-- [ ] **Step 3: Update `server/routes/customer.js` `/plans`**
+- [ ] **Step 3a: `server/routes/customer.js` `/account`**
+
+Add import at top: `import { addInterval, frequencyLabel, perLabel } from '../lib/billing.js';`
+
+In the `/account` subscription query, replace `p.interval_months` with `p.interval_unit, p.interval_count`. In the response `subscription` object, replace `intervalMonths: subscription.interval_months` with:
+
+```js
+      intervalUnit: subscription.interval_unit,
+      intervalCount: subscription.interval_count,
+      frequency: frequencyLabel(subscription.interval_unit, subscription.interval_count),
+      perLabel: perLabel(subscription.interval_unit, subscription.interval_count),
+```
+
+- [ ] **Step 3b: `server/routes/customer.js` `/plans`**
 
 Replace the `available` query and mapping so it (a) offers only `status='active' AND customer_available=1` plans plus the customer's current plan, ordered by `display_order`, and (b) returns `frequency`/`perLabel` instead of `intervalMonths`:
 
