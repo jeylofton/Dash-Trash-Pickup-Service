@@ -2168,14 +2168,25 @@ $('#pfSave').addEventListener('click', async () => {
 async function renderPlanHistory(id) {
   const { priceChanges } = await api(`/api/admin/plans/${id}`);
   $('#pcHistory').innerHTML = table(
-    ['Scheduled / effective', 'From', 'To', 'Applies to', 'Status'],
+    ['Scheduled / effective', 'From', 'To', 'Applies to', 'Status', ''],
     (priceChanges || []).map(pc => `<tr>
       <td class="small muted">${esc(pc.effectiveDate)}</td>
       <td class="num">${money(pc.from)}</td>
       <td class="num">${money(pc.to)}</td>
       <td class="small">${pc.appliesTo === 'existing_and_new' ? 'Existing + new' : 'New only'}</td>
       <td>${esc(pc.status)}</td>
+      <td>${pc.status === 'scheduled'
+        ? `<button class="btn small" data-cancel-pc="${pc.id}">Cancel</button>` : ''}</td>
     </tr>`).join(''));
+  // Only a still-scheduled change can be cancelled; the server re-checks.
+  $$('#pcHistory [data-cancel-pc]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Cancel this scheduled price change? Existing customers keep their current price.')) return;
+    try {
+      await api(`/api/admin/plans/${id}/price-change/${b.dataset.cancelPc}/cancel`, { method: 'POST' });
+      toast('Scheduled price change cancelled.');
+      renderPlanHistory(id);
+    } catch (e) { toast(e.message, 'error'); }
+  }));
 }
 
 function showPlan(id) {
