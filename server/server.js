@@ -16,7 +16,7 @@ import express from 'express';
 import { migrate, one, migrateDemoFlags } from './db/index.js';
 import { enrol } from './lib/signup.js';
 import { payments, providerName } from './lib/payments/index.js';
-import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles, migrateWorkerBanking } from './db/migrate_admin.js';
+import { migrateAdmin, migrateCommunities, migrateIssueCodes, migrateAdminControls, migrateDynamicRoles, migrateWorkerBanking, migrateWorkerLifecycle } from './db/migrate_admin.js';
 import { migrateCommunityLifecycle } from './db/migrate_lifecycle.js';
 import { migratePlans, ensureDefaultPlans } from './db/migrate_plans.js';
 import { applyDuePriceChanges, listPublicPlans } from './lib/plans.js';
@@ -351,7 +351,7 @@ migrate();
 const adminChanges = [...migrateAdmin(), ...migrateCommunities(), ...migrateIssueCodes(),
                       ...migrateAdminControls(), ...migrateDynamicRoles(),
                       ...migrateCommunityLifecycle(), ...migratePlans(),
-                      ...migrateWorkerBanking()];
+                      ...migrateWorkerBanking(), ...migrateWorkerLifecycle()];
 if (adminChanges.length) adminChanges.forEach(c => console.log('  migration:', c));
 migrateDemoFlags();   // after the admin rebuilds, so is_demo columns survive
 

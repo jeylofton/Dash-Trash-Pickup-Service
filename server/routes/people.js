@@ -21,11 +21,12 @@ import { laborByEmployee, dollars } from '../lib/finance.js';
 import { today, DAY_NAMES } from '../lib/schedule.js';
 import { deletability, assertDeletable } from '../lib/deletable.js';
 import { encrypt, decrypt, encryptionAvailable } from '../lib/encryption.js';
+import { availableActions, resolveAction } from '../lib/lifecycle.js';
+import { WORKER_STATUSES, WORKER_LIFECYCLE, WORKER_ACTION_PERMISSION } from '../lib/worker_lifecycle.js';
 
 export const router = Router();
 router.use(requirePermission('employees.view','system.users.manage'));
 
-const EMP_STATUS = ['active', 'inactive', 'on_leave', 'terminated', 'archived'];
 /* Roles are data now, so a hardcoded list would go stale the moment an
    admin creates a custom one. Validate against the table instead. */
 const isValidRole = (key) =>
@@ -51,7 +52,11 @@ router.get('/employees', (req, res) => {
   const where = [], params = [];
   if (q) { where.push('(u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR e.employee_code LIKE ?)');
            params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`); }
-  if (status) { where.push('e.status = ?'); params.push(status); }
+  // '__all__' shows every status (archived included). A specific status
+  // filters to it. The default view hides archived workers.
+  if (status === '__all__') { /* no status filter */ }
+  else if (status) { where.push('e.status = ?'); params.push(status); }
+  else { where.push("e.status != 'archived'"); }
   if (workerType && ['W2', '1099'].includes(workerType)) {
     where.push('e.worker_type = ?'); params.push(workerType);
   }
@@ -158,6 +163,18 @@ router.get('/employees/:id', (req, res) => {
         updatedAt: b.updated_at,
       };
     })(),
+    lifecycle: {
+      statusLabel: WORKER_STATUSES[emp.status]?.label ?? emp.status,
+      statusTone: WORKER_STATUSES[emp.status]?.tone ?? '',
+      statusEffectiveDate: emp.status_effective_date,
+      statusReason: emp.status_reason,
+      endDate: emp.end_date,
+      suspensionEndDate: emp.suspension_end_date,
+      accountLogin: emp.account_status === 'active' ? 'enabled' : 'disabled',
+    },
+    statusHistory: workerStatusHistory(emp.id),
+    periods: all(`SELECT * FROM employment_periods WHERE employee_id = ?
+                   ORDER BY start_date DESC, id DESC`, emp.id),
   });
 });
 
@@ -204,6 +221,14 @@ router.post('/employees', requirePermission('employees.create'), async (req, res
            VALUES (?, ?, ?, ?, ?)`,
           eid, b.payType, Math.round(Number(b.payRate) * 100), b.payEffectiveDate || today(), req.user.id);
     }
+    // Open the first employment period and log the hire, so the lifecycle
+    // history is complete from day one.
+    run(`INSERT INTO employment_periods (employee_id, worker_type, start_date) VALUES (?, ?, ?)`,
+        eid, workerType, b.hireDate ?? today());
+    run(`INSERT INTO employee_status_history
+           (employee_id, from_status, to_status, action, effective_date, changed_by)
+         VALUES (?, NULL, 'active', 'hire', ?, ?)`,
+        eid, b.hireDate ?? today(), req.user.id);
     if (temporary) {
       run(`INSERT INTO password_reset_events (user_id, actor_user_id, kind, expires_at)
            VALUES (?, ?, 'temporary_password', datetime('now','+7 days'))`, uid, req.user.id);
@@ -227,8 +252,14 @@ router.patch('/employees/:id', requirePermission('employees.edit'), (req, res) =
   if (!emp) return res.status(404).json({ error: 'Employee not found.' });
   const b = req.body || {};
 
-  if (b.status && !EMP_STATUS.includes(b.status)) {
-    return res.status(400).json({ error: `Status must be one of: ${EMP_STATUS.join(', ')}.` });
+  // Status is an employment-lifecycle change, not a plain field edit: it
+  // moves only through the lifecycle actions, which capture the effective
+  // date, reason and account effects and write status history.
+  if (b.status !== undefined && b.status !== emp.status) {
+    return res.status(400).json({
+      error: 'Worker status changes go through Worker Actions, not the edit form.',
+      lifecycleUrl: `/api/people/employees/${emp.id}/lifecycle`,
+    });
   }
   if (b.email && one('SELECT id FROM users WHERE email = ? AND id != ?', b.email, emp.user_id)) {
     return res.status(409).json({ error: 'That email is already in use.' });
@@ -249,28 +280,15 @@ router.patch('/employees/:id', requirePermission('employees.edit'), (req, res) =
 
     const validWorkerType = b.workerType && ['W2', '1099'].includes(b.workerType) ? b.workerType : undefined;
     const empChanges = diff(
-      { status: emp.status, employee_code: emp.employee_code, hire_date: emp.hire_date, worker_type: emp.worker_type },
-      { status: b.status, employee_code: b.employeeCode, hire_date: b.hireDate, worker_type: validWorkerType });
+      { employee_code: emp.employee_code, hire_date: emp.hire_date, worker_type: emp.worker_type },
+      { employee_code: b.employeeCode, hire_date: b.hireDate, worker_type: validWorkerType });
 
     if (Object.keys(empChanges).length) {
-      run(`UPDATE employees SET status = COALESCE(?, status),
-                                employee_code = COALESCE(?, employee_code),
+      run(`UPDATE employees SET employee_code = COALESCE(?, employee_code),
                                 hire_date = COALESCE(?, hire_date),
-                                worker_type = COALESCE(?, worker_type),
-                                end_date = CASE WHEN ? IN ('terminated','archived')
-                                                THEN COALESCE(end_date, date('now')) ELSE NULL END
+                                worker_type = COALESCE(?, worker_type)
             WHERE id = ?`,
-          b.status ?? null, b.employeeCode ?? null, b.hireDate ?? null,
-          validWorkerType ?? null, b.status ?? emp.status, emp.id);
-
-      // Leaving 'active' must also close the login, or a terminated employee
-      // could still sign in and record pickups.
-      if (b.status && b.status !== 'active') {
-        run(`UPDATE users SET status = 'deactivated' WHERE id = ?`, emp.user_id);
-        destroyAllSessions(emp.user_id);
-      } else if (b.status === 'active') {
-        run(`UPDATE users SET status = 'active' WHERE id = ?`, emp.user_id);
-      }
+          b.employeeCode ?? null, b.hireDate ?? null, validWorkerType ?? null, emp.id);
     }
 
     const profileFields = {
@@ -309,6 +327,128 @@ router.post('/employees/:id/notes', (req, res) => {
                  req.params.id, req.user.id, body).lastInsertRowid;
   audit(req, 'employee.note_added', { entityType: 'employee', entityId: Number(req.params.id) });
   res.status(201).json({ id });
+});
+
+/* ============================================================
+   Worker employment lifecycle: suspend, terminate, resign,
+   end contract, archive, rehire — through the shared engine so
+   the CURRENT status decides what is allowed, and the server
+   re-checks every rule the UI drew. Nothing here deletes history.
+   ============================================================ */
+
+/** True if the caller may perform an action that needs `perm`. */
+function mayDo(req, perm) {
+  return req.user?.role === 'admin' ||
+    one(`SELECT allowed FROM role_permissions WHERE role_key = ? AND permission = ?`,
+        req.user?.role, perm)?.allowed === 1;
+}
+
+function loadWorker(id) {
+  return one(`SELECT e.*, u.id AS user_id, u.first_name, u.last_name, u.email,
+                     u.status AS account_status
+                FROM employees e JOIN users u ON u.id = e.user_id WHERE e.id = ?`, id);
+}
+
+const workerStatusHistory = (id) => all(`
+  SELECT h.*, u.first_name, u.last_name FROM employee_status_history h
+    LEFT JOIN users u ON u.id = h.changed_by
+   WHERE h.employee_id = ? ORDER BY h.created_at DESC, h.id DESC LIMIT 50`, id)
+  .map(h => ({
+    ...h,
+    fromLabel: WORKER_STATUSES[h.from_status]?.label ?? h.from_status ?? 'New',
+    toLabel: WORKER_STATUSES[h.to_status]?.label ?? h.to_status,
+  }));
+
+/** What may be done to this worker right now, plus status + history. */
+router.get('/employees/:id/actions', (req, res) => {
+  const emp = loadWorker(req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found.' });
+
+  const ctx = { userId: req.user.id };
+  const del = deletability('employee', emp.id, emp);
+  const meta = WORKER_STATUSES[emp.status] ?? { label: emp.status, tone: '', description: '' };
+  // Only offer actions the caller actually has permission to run.
+  const actions = availableActions(WORKER_LIFECYCLE, emp, ctx)
+    .filter(a => mayDo(req, WORKER_ACTION_PERMISSION[a.key]));
+
+  res.json({
+    name: `${emp.first_name} ${emp.last_name}`,
+    worker: { id: emp.id, name: `${emp.first_name} ${emp.last_name}`,
+              status: emp.status, workerType: emp.worker_type },
+    status: { key: emp.status, ...meta },
+    account: { login: emp.account_status === 'active' ? 'enabled' : 'disabled',
+               status: emp.account_status },
+    lifecycle: {
+      statusEffectiveDate: emp.status_effective_date, statusReason: emp.status_reason,
+      endDate: emp.end_date, suspensionEndDate: emp.suspension_end_date,
+    },
+    actions,
+    statusHistory: workerStatusHistory(emp.id),
+    periods: all(`SELECT * FROM employment_periods WHERE employee_id = ?
+                   ORDER BY start_date DESC, id DESC`, emp.id),
+    // Permanent deletion is never a lifecycle action — only offered for a
+    // worker who has never been used at all.
+    deletion: { ...del, url: `/api/people/employees/${emp.id}` },
+  });
+});
+
+function performWorkerLifecycle(req, res, actionKey, input) {
+  const emp = loadWorker(req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found.' });
+
+  const perm = WORKER_ACTION_PERMISSION[actionKey];
+  // An unknown action, or one the caller cannot perform, simply does not
+  // exist for them — never reveal it with a 403.
+  if (!perm || !mayDo(req, perm)) return res.status(404).json({ error: 'Not found.' });
+
+  const ctx = { userId: req.user.id, input };
+  let resolved;
+  try {
+    resolved = resolveAction(WORKER_LIFECYCLE, emp, actionKey, input, ctx);
+  } catch (err) {
+    return res.status(err.status ?? 400).json({
+      error: err.message, code: err.code, currentStatus: err.currentStatus, field: err.field,
+    });
+  }
+
+  if (actionKey === 'reactivate') {
+    const cents = Math.round(Number(resolved.values.payRate) * 100);
+    if (!Number.isFinite(cents) || cents <= 0) {
+      return res.status(400).json({ error: 'Pay rate must be a positive number.', field: 'payRate' });
+    }
+  }
+
+  const { action, values, from, to } = resolved;
+  const result = tx(() => {
+    const out = action.run(emp, values, ctx) ?? {};
+    run(`INSERT INTO employee_status_history
+           (employee_id, from_status, to_status, changed_by, action,
+            effective_date, reason, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        emp.id, from, to, req.user.id, actionKey,
+        values.effectiveDate ?? values.lastWorkingDate ?? null,
+        values.reason ?? null, values.notes ?? out.message ?? null);
+    return out;
+  });
+
+  audit(req, `employee.${actionKey}`, {
+    entityType: 'employee', entityId: emp.id,
+    detail: { name: `${emp.first_name} ${emp.last_name}`, from, to,
+              effectiveDate: values.effectiveDate ?? values.lastWorkingDate ?? null,
+              reason: values.reason ?? null },
+  });
+
+  res.json({ ok: true, action: actionKey, from, to,
+             statusLabel: WORKER_STATUSES[to]?.label ?? to, ...result });
+}
+
+router.post('/employees/:id/lifecycle', (req, res) => {
+  const b = req.body || {};
+  if (!b.action) return res.status(400).json({ error: 'Choose one action to perform.' });
+  if (Array.isArray(b.action)) {
+    return res.status(400).json({ error: 'Only one action can be performed at a time.' });
+  }
+  return performWorkerLifecycle(req, res, b.action, b);
 });
 
 /* ============================================================
@@ -592,6 +732,8 @@ router.delete('/employees/:id', requirePermission('employees.archive'), (req, re
     run('DELETE FROM employee_banking WHERE employee_id = ?', e.id);
     run('DELETE FROM employee_profiles WHERE employee_id = ?', e.id);
     run('DELETE FROM employee_notes WHERE employee_id = ?', e.id);
+    run('DELETE FROM employee_status_history WHERE employee_id = ?', e.id);
+    run('DELETE FROM employment_periods WHERE employee_id = ?', e.id);
     run('DELETE FROM employees WHERE id = ?', e.id);
     run('DELETE FROM user_roles WHERE user_id = ?', e.user_id);
     run('DELETE FROM sessions WHERE user_id = ?', e.user_id);

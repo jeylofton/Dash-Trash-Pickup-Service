@@ -469,6 +469,128 @@ export function migrateWorkerBanking() {
   return changes;
 }
 
+/**
+ * Worker employment lifecycle: suspension, termination, resignation,
+ * contractor end, archive and rehire — none of which ever delete history.
+ *
+ * The employees.status CHECK is removed so the lifecycle can add states
+ * (suspended, resigned, contract_ended) without another table rebuild —
+ * statuses are validated in application code, the same choice already
+ * made for users.role.
+ */
+export function migrateWorkerLifecycle() {
+  const changes = [];
+
+  /* --- drop the employees.status CHECK so new statuses are allowed --- */
+  const empDdl = one(`SELECT sql FROM sqlite_master WHERE type='table' AND name='employees'`)?.sql || '';
+  if (/CHECK\s*\(\s*status\s+IN/i.test(empDdl)) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec('BEGIN');
+    try {
+      const cols = columns('employees');
+      db.exec(`
+        CREATE TABLE employees_new (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id       INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+          employee_code TEXT    UNIQUE,
+          hire_date     TEXT,
+          -- No CHECK: worker statuses are validated in application code so
+          -- the lifecycle can add states without another table rebuild.
+          status        TEXT    NOT NULL DEFAULT 'active',
+          end_date      TEXT,
+          created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+          is_demo       INTEGER NOT NULL DEFAULT 0,
+          worker_type   TEXT    NOT NULL DEFAULT 'W2'
+        )`);
+      const shared = ['id','user_id','employee_code','hire_date','status','end_date',
+                      'created_at','is_demo','worker_type'].filter(c => cols.includes(c));
+      db.exec(`INSERT INTO employees_new (${shared.join(',')}) SELECT ${shared.join(',')} FROM employees`);
+      db.exec('DROP TABLE employees');
+      db.exec('ALTER TABLE employees_new RENAME TO employees');
+      db.exec('COMMIT');
+      changes.push('employees.status CHECK removed (lifecycle statuses)');
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    } finally {
+      db.exec('PRAGMA foreign_keys = ON');
+    }
+  }
+
+  /* --- current-status metadata shown on the profile --- */
+  if (addColumn('employees', 'status_effective_date', 'TEXT')) changes.push('employees.status_effective_date');
+  if (addColumn('employees', 'status_reason', 'TEXT'))         changes.push('employees.status_reason');
+  if (addColumn('employees', 'suspension_end_date', 'TEXT'))   changes.push('employees.suspension_end_date');
+
+  /* --- every status change, written down --- */
+  if (!one(`SELECT name FROM sqlite_master WHERE type='table' AND name='employee_status_history'`)) {
+    db.exec(`
+      CREATE TABLE employee_status_history (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id    INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        from_status    TEXT,
+        to_status      TEXT NOT NULL,
+        action         TEXT NOT NULL,
+        effective_date TEXT,
+        reason         TEXT,
+        note           TEXT,
+        changed_by     INTEGER,
+        created_at     TEXT DEFAULT (datetime('now'))
+      )`);
+    changes.push('employee_status_history table created');
+  }
+
+  /* --- employment periods, so a rehire keeps the old period intact --- */
+  if (!one(`SELECT name FROM sqlite_master WHERE type='table' AND name='employment_periods'`)) {
+    db.exec(`
+      CREATE TABLE employment_periods (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        employee_id  INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        worker_type  TEXT,
+        start_date   TEXT,
+        end_date     TEXT,
+        end_action   TEXT,
+        end_reason   TEXT,
+        created_at   TEXT DEFAULT (datetime('now'))
+      )`);
+    changes.push('employment_periods table created');
+  }
+
+  /* Give every existing worker an opening period so history is complete. */
+  const noPeriod = all(`SELECT e.id, e.hire_date, e.end_date, e.worker_type, e.status
+                          FROM employees e
+                          LEFT JOIN employment_periods p ON p.employee_id = e.id
+                         WHERE p.id IS NULL`);
+  for (const e of noPeriod) {
+    db.prepare(`INSERT INTO employment_periods
+                  (employee_id, worker_type, start_date, end_date, end_action)
+                VALUES (?, ?, ?, ?, ?)`)
+      .run(e.id, e.worker_type || 'W2', e.hire_date || null, e.end_date || null,
+           e.end_date ? e.status : null);
+  }
+  if (noPeriod.length) changes.push(`${noPeriod.length} employment period(s) backfilled`);
+
+  /* --- permissions for the lifecycle actions --- */
+  const perms = [
+    ['employees.suspend',    'Employees', 'Suspend and reinstate workers', 40],
+    ['employees.terminate',  'Employees', 'Terminate, record resignation, end contract', 41],
+    ['employees.reactivate', 'Employees', 'Rehire / reactivate former workers', 42],
+  ];
+  for (const [key, cat, label, sort] of perms) {
+    if (!one('SELECT key FROM permissions WHERE key = ?', key)) {
+      db.prepare('INSERT INTO permissions (key, category, label, sort_order) VALUES (?, ?, ?, ?)')
+        .run(key, cat, label, sort);
+      changes.push(`permission ${key} added`);
+    }
+    if (!one('SELECT permission FROM role_permissions WHERE role_key = ? AND permission = ?', 'manager', key)) {
+      db.prepare('INSERT OR IGNORE INTO role_permissions (role_key, permission, allowed) VALUES (?, ?, 1)')
+        .run('manager', key);
+    }
+  }
+
+  return changes;
+}
+
 /** Remove the fixed users.role CHECK — roles are rows now, not constants. */
 export function migrateDynamicRoles() {
   const ddl = one(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`)?.sql || '';
