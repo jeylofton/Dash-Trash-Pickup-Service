@@ -7,6 +7,7 @@ import { generateServiceDay, today, DAY_NAMES } from '../lib/schedule.js';
 import { setting } from '../lib/permissions.js';
 import { clockIn, clockOut, openShift, shiftsFor, entryPayCents,
          currentPayPeriod, rateOn, MINUTES_SQL } from '../lib/timeclock.js';
+import { encrypt, decrypt, encryptionAvailable } from '../lib/encryption.js';
 
 export const router = Router();
 router.use(requireRole('employee'), requireEmployee);
@@ -236,6 +237,7 @@ router.get('/issues', (req, res) => {
 });
 
 router.get('/profile', (req, res) => {
+  const banking = one('SELECT * FROM employee_banking WHERE employee_id = ?', req.employee.id);
   res.json({
     employee: req.employee,
     user: { firstName: req.user.first_name, lastName: req.user.last_name,
@@ -247,9 +249,107 @@ router.get('/profile', (req, res) => {
        ORDER BY r.day_of_week`, req.employee.id)
       .map(r => ({ ...r, dayName: DAY_NAMES[r.day_of_week] })),
     maxPhotoBytes: MAX_BYTES,
+    bankingConfigured: Boolean(banking),
+    banking: banking ? {
+      accountHolderName: banking.account_holder_name,
+      bankName: banking.bank_name,
+      accountType: banking.account_type,
+      accountLast4: banking.account_last4,
+      routingLast4: banking.routing_last4,
+      directDeposit: Boolean(banking.direct_deposit),
+    } : null,
   });
 });
 
+
+/* ============================================================
+   Banking — self-service
+
+   An employee can only view/update THEIR OWN banking information.
+   Full account numbers are never returned after initial entry.
+   ============================================================ */
+
+router.get('/banking', (req, res) => {
+  const b = one('SELECT * FROM employee_banking WHERE employee_id = ?', req.employee.id);
+  if (!b) return res.json(null);
+  res.json({
+    accountHolderName: b.account_holder_name,
+    bankName: b.bank_name,
+    accountType: b.account_type,
+    accountLast4: b.account_last4,
+    routingLast4: b.routing_last4,
+    directDeposit: Boolean(b.direct_deposit),
+    updatedAt: b.updated_at,
+  });
+});
+
+router.put('/banking', (req, res) => {
+  if (!encryptionAvailable()) {
+    return res.status(503).json({ error: 'Banking features are not yet configured.' });
+  }
+  const b = req.body || {};
+  if (!b.accountHolderName || !b.bankName || !b.accountType ||
+      !b.routingNumber || !b.accountNumber || !b.confirmAccountNumber) {
+    return res.status(400).json({ error: 'All banking fields are required.' });
+  }
+  if (!['checking', 'savings'].includes(b.accountType)) {
+    return res.status(400).json({ error: 'Account type must be checking or savings.' });
+  }
+  if (!/^\d{9}$/.test(b.routingNumber)) {
+    return res.status(400).json({ error: 'Routing number must be 9 digits.' });
+  }
+  if (!/^\d{4,17}$/.test(b.accountNumber)) {
+    return res.status(400).json({ error: 'Account number must be 4–17 digits.' });
+  }
+  if (b.accountNumber !== b.confirmAccountNumber) {
+    return res.status(400).json({ error: 'Account numbers do not match.' });
+  }
+
+  const routingEnc = encrypt(b.routingNumber);
+  const accountEnc = encrypt(b.accountNumber);
+  const routingLast4 = b.routingNumber.slice(-4);
+  const accountLast4 = b.accountNumber.slice(-4);
+
+  const existing = one('SELECT employee_id FROM employee_banking WHERE employee_id = ?', req.employee.id);
+  if (existing) {
+    run(`UPDATE employee_banking SET account_holder_name = ?, bank_name = ?, account_type = ?,
+            routing_number_enc = ?, account_number_enc = ?, routing_last4 = ?, account_last4 = ?,
+            direct_deposit = ?, updated_at = datetime('now')
+          WHERE employee_id = ?`,
+        b.accountHolderName, b.bankName, b.accountType,
+        routingEnc, accountEnc, routingLast4, accountLast4,
+        b.directDeposit ? 1 : 0, req.employee.id);
+  } else {
+    run(`INSERT INTO employee_banking (employee_id, account_holder_name, bank_name, account_type,
+            routing_number_enc, account_number_enc, routing_last4, account_last4, direct_deposit)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        req.employee.id, b.accountHolderName, b.bankName, b.accountType,
+        routingEnc, accountEnc, routingLast4, accountLast4,
+        b.directDeposit ? 1 : 0);
+  }
+
+  audit(req, 'employee.banking_self_updated', {
+    entityType: 'employee', entityId: req.employee.id,
+    detail: { bankName: b.bankName, accountType: b.accountType, accountLast4 },
+  });
+  res.json({ ok: true });
+});
+
+router.patch('/banking', (req, res) => {
+  const existing = one('SELECT * FROM employee_banking WHERE employee_id = ?', req.employee.id);
+  if (!existing) return res.status(404).json({ error: 'No banking information on file.' });
+
+  const b = req.body || {};
+  if (b.directDeposit !== undefined) {
+    run('UPDATE employee_banking SET direct_deposit = ?, updated_at = datetime(?) WHERE employee_id = ?',
+        b.directDeposit ? 1 : 0, 'now', req.employee.id);
+    audit(req, 'employee.direct_deposit_self_toggled', {
+      entityType: 'employee', entityId: req.employee.id,
+      detail: { directDeposit: Boolean(b.directDeposit) },
+    });
+  }
+  res.json({ ok: true });
+});
 
 /* ============================================================
    Time clock

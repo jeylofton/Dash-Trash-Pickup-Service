@@ -925,23 +925,28 @@ const EMP_STATUS_PILL = { active:'ok', inactive:'', on_leave:'warn', terminated:
 const fmtStatus = (st) => `<span class="pill ${EMP_STATUS_PILL[st] ?? ''}">${esc(String(st).replace('_',' '))}</span>`;
 const hrs = (mins) => (mins / 60).toFixed(1);
 
+const workerTypeBadge = (wt) => wt === '1099'
+  ? '<span class="pill accent">1099</span>'
+  : '<span class="pill">W-2</span>';
+
 async function loadEmployees() {
-  // Rendering the list always means no employee is open.
   sections.employees.reset();
 
   const params = new URLSearchParams();
   if ($('#empSearch').value) params.set('q', $('#empSearch').value);
   if ($('#empStatusFilter').value) params.set('status', $('#empStatusFilter').value);
+  if ($('#empWorkerTypeFilter').value) params.set('workerType', $('#empWorkerTypeFilter').value);
 
   const rows = await api('/api/people/employees?' + params);
   $('#empTable').innerHTML = table(
-    ['Employee', 'Contact', 'Code', 'Title', 'Routes', 'Last login', 'Status', ''],
+    ['Employee', 'Contact', 'Code', 'Type', 'Title', 'Routes', 'Last login', 'Status', ''],
     rows.map(e => `<tr>
       <td><strong>${esc(e.first_name)} ${esc(e.last_name)}</strong>
         ${e.must_change_password ? '<span class="pill warn">password reset pending</span>' : ''}
         ${e.locked_until && new Date(e.locked_until) > new Date() ? '<span class="pill bad">locked</span>' : ''}</td>
       <td class="small">${esc(e.email)}<br /><span class="muted">${esc(e.phone || '')}</span></td>
       <td class="small">${esc(e.employee_code || '—')}</td>
+      <td>${workerTypeBadge(e.worker_type)}</td>
       <td class="small">${esc(e.job_title || '—')}</td>
       <td class="num">${e.active_routes}</td>
       <td class="small muted">${e.last_login_at ? fmtDate(e.last_login_at) : 'never'}</td>
@@ -969,8 +974,8 @@ async function showEmployee(id) {
       <div class="row" style="align-items:flex-start">
         <div style="flex:2 1 300px">
           <h1 style="margin-bottom:4px">${esc(e.first_name)} ${esc(e.last_name)}</h1>
-          <p class="muted small">${esc(p.job_title || 'Employee')} · ${esc(e.employee_code || 'no code')}
-            · hired ${fmtDate(e.hire_date)}</p>
+          <p class="muted small">${esc(p.job_title || 'Employee')} · ${workerTypeBadge(e.worker_type)}
+            · ${esc(e.employee_code || 'no code')} · hired ${fmtDate(e.hire_date)}</p>
           <p>${fmtStatus(e.status)} ${e.locked_until && new Date(e.locked_until) > new Date()
               ? '<span class="pill bad">account locked</span>' : ''}
             ${e.must_change_password ? '<span class="pill warn">must change password</span>' : ''}</p>
@@ -1077,6 +1082,59 @@ async function showEmployee(id) {
         <p class="muted small">Existing passwords can never be viewed — only replaced.</p>
       </div>
 
+      <div class="card" id="bankingCard">
+        <h2>Payroll &amp; Banking</h2>
+        ${d.banking ? `
+          <table>
+            <tr><th>Account holder</th><td>${esc(d.banking.accountHolderName)}</td></tr>
+            <tr><th>Bank</th><td>${esc(d.banking.bankName)}</td></tr>
+            <tr><th>Account type</th><td>${esc(d.banking.accountType)}</td></tr>
+            <tr><th>Routing</th><td>···· ${esc(d.banking.routingLast4)}</td></tr>
+            <tr><th>Account</th><td>···· ${esc(d.banking.accountLast4)}</td></tr>
+            <tr><th>Direct deposit</th><td>${d.banking.directDeposit
+              ? '<span class="pill ok">Enabled</span>'
+              : '<span class="pill">Disabled</span>'}</td></tr>
+          </table>
+          <div class="row" style="margin-top:12px">
+            <button class="btn" id="editBankingBtn">Edit banking</button>
+            <button class="btn" id="toggleDDBtn">${d.banking.directDeposit ? 'Disable' : 'Enable'} direct deposit</button>
+          </div>
+        ` : `
+          <p class="muted small">No banking information on file.</p>
+          <button class="btn btn-primary" id="editBankingBtn">Add banking info</button>
+        `}
+        <div id="bankingFormWrap" hidden>
+          <h3 style="margin-top:16px">${d.banking ? 'Update' : 'Add'} banking information</h3>
+          <div class="row">
+            <div><label for="bkHolder">Account holder name</label>
+              <input id="bkHolder" value="${esc(d.banking?.accountHolderName || (e.first_name + ' ' + e.last_name))}" /></div>
+            <div><label for="bkBank">Bank name</label>
+              <input id="bkBank" value="${esc(d.banking?.bankName || '')}" /></div>
+          </div>
+          <div class="row">
+            <div><label for="bkType">Account type</label>
+              <select id="bkType">
+                <option value="checking" ${d.banking?.accountType === 'checking' ? 'selected' : ''}>Checking</option>
+                <option value="savings" ${d.banking?.accountType === 'savings' ? 'selected' : ''}>Savings</option>
+              </select></div>
+            <div><label for="bkRouting">Routing number</label>
+              <input id="bkRouting" maxlength="9" placeholder="9 digits" /></div>
+          </div>
+          <div class="row">
+            <div><label for="bkAcct">Account number</label>
+              <input id="bkAcct" placeholder="4–17 digits" /></div>
+            <div><label for="bkConfirm">Confirm account number</label>
+              <input id="bkConfirm" placeholder="Re-enter account number" /></div>
+          </div>
+          <div class="row">
+            <div><label><input type="checkbox" id="bkDD" ${d.banking?.directDeposit ? 'checked' : ''} /> Enable direct deposit</label></div>
+          </div>
+          <p class="msg" id="bkMsg" hidden></p>
+          <button class="btn btn-primary" id="bkSave">Save banking info</button>
+          <button class="btn" id="bkCancel">Cancel</button>
+        </div>
+      </div>
+
       <div class="card">
         <h2>Admin notes</h2>
         <div class="field"><textarea id="empNote" rows="2" placeholder="Private note about this employee"></textarea></div>
@@ -1119,6 +1177,9 @@ async function showEmployee(id) {
             .map(v => `<option value="${v}" ${v === p.background_check_status ? 'selected' : ''}>${v || '—'}</option>`).join('')}</select></div>
       </div>
       <div class="row">
+        <div><label>Worker type</label><select id="edWorkerType">
+          <option value="W2" ${e.worker_type === 'W2' ? 'selected' : ''}>W-2 Employee</option>
+          <option value="1099" ${e.worker_type === '1099' ? 'selected' : ''}>1099 Contractor</option></select></div>
         <div><label>Pay type</label><select id="edPayType">
           <option value="hourly" ${pay.current.pay_type === 'hourly' ? 'selected' : ''}>Hourly</option>
           <option value="daily" ${pay.current.pay_type === 'daily' ? 'selected' : ''}>Daily / shift</option></select></div>
@@ -1182,6 +1243,7 @@ async function showEmployee(id) {
           status: $('#edStatus').value, vehicleAssignment: $('#edVehicle').value,
           uniformSize: $('#edUniform').value,
           backgroundCheckStatus: $('#edBg').value || undefined,
+          workerType: $('#edWorkerType').value,
         }),
       });
       // Pay is its own record so history is preserved; only write if it changed.
@@ -1225,6 +1287,50 @@ async function showEmployee(id) {
     } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
   }));
 
+  const editBankingBtn = $('#editBankingBtn');
+  if (editBankingBtn) editBankingBtn.addEventListener('click', () => {
+    $('#bankingFormWrap').hidden = false;
+    editBankingBtn.hidden = true;
+  });
+  const bkCancel = $('#bkCancel');
+  if (bkCancel) bkCancel.addEventListener('click', () => {
+    $('#bankingFormWrap').hidden = true;
+    if (editBankingBtn) editBankingBtn.hidden = false;
+  });
+  const toggleDDBtn = $('#toggleDDBtn');
+  if (toggleDDBtn) toggleDDBtn.addEventListener('click', async () => {
+    try {
+      await api(`/api/people/employees/${id}/banking`, {
+        method: 'PATCH', body: JSON.stringify({ directDeposit: !d.banking.directDeposit }),
+      });
+      showEmployee(id);
+    } catch (ex) { toast(ex.message, 'error'); }
+  });
+  const bkSave = $('#bkSave');
+  if (bkSave) bkSave.addEventListener('click', async () => {
+    const bkMsg = $('#bkMsg');
+    try {
+      const routing = $('#bkRouting').value.trim();
+      const account = $('#bkAcct').value.trim();
+      const confirm = $('#bkConfirm').value.trim();
+      if (account !== confirm) throw new Error('Account numbers do not match.');
+      await api(`/api/people/employees/${id}/banking`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          accountHolderName: $('#bkHolder').value.trim(),
+          bankName: $('#bkBank').value.trim(),
+          accountType: $('#bkType').value,
+          routingNumber: routing,
+          accountNumber: account,
+          confirmAccountNumber: confirm,
+          directDeposit: $('#bkDD').checked,
+        }),
+      });
+      toast('Banking info saved.');
+      showEmployee(id);
+    } catch (ex) { bkMsg.textContent = ex.message; bkMsg.className = 'msg error'; bkMsg.hidden = false; }
+  });
+
   $('#addEmpNote').addEventListener('click', async () => {
     const body = $('#empNote').value.trim();
     if (!body) return;
@@ -1253,6 +1359,7 @@ $('#neSave').addEventListener('click', async () => {
         firstName: $('#neFirst').value, lastName: $('#neLast').value,
         email: $('#neEmail').value, phone: $('#nePhone').value,
         employeeCode: $('#neCode').value || undefined, hireDate: $('#neHire').value || undefined,
+        workerType: $('#neWorkerType').value,
         payType: $('#nePayType').value, payRate: $('#nePayRate').value || undefined,
         address: $('#neAddress').value, zip: $('#neZip').value,
         emergencyContactName: $('#neEcName').value, emergencyContactPhone: $('#neEcPhone').value,
@@ -1281,6 +1388,7 @@ $('#empSearch').addEventListener('input', () => {
   clearTimeout(empSearchTimer); empSearchTimer = setTimeout(loadEmployees, 250);
 });
 $('#empStatusFilter').addEventListener('change', loadEmployees);
+$('#empWorkerTypeFilter').addEventListener('change', loadEmployees);
 
 /* ---------- accounts ---------- */
 async function loadAccounts() {
@@ -1638,16 +1746,20 @@ async function loadPayroll() {
   $('#prCsv').href = `/api/finance/payroll.csv?from=${pr.period.start}&to=${pr.period.end}`;
 
   $('#payrollTable').innerHTML = table(
-    ['Employee', 'Pay type', 'Rate', 'Shifts', 'Hours', 'Estimated pay'],
+    ['Employee', 'Type', 'Pay type', 'Rate', 'Shifts', 'Hours', 'Estimated pay', 'Direct deposit'],
     pr.rows.map(r => `<tr>
       <td><strong>${esc(r.name)}</strong></td>
+      <td>${workerTypeBadge(r.workerType)}</td>
       <td>${esc(r.payType)}</td>
       <td class="num">${money(r.rate)}${r.payType === 'hourly' ? '/hr' : '/shift'}</td>
       <td class="num">${r.shifts}</td>
       <td class="num">${r.hours}</td>
       <td class="num"><strong>${money(r.estimatedPay)}</strong></td>
+      <td>${r.directDepositConfigured
+        ? '<span class="pill ok">Yes</span>'
+        : '<span class="pill muted">No</span>'}</td>
     </tr>`).join('')
-    + `<tr><td colspan="5"><strong>Total estimated payroll</strong></td>
+    + `<tr><td colspan="7"><strong>Total estimated payroll</strong></td>
          <td class="num"><strong>${money(pr.totalEstimatedPay)}</strong></td></tr>`);
 
   if (!$('#compEmp').options.length) {

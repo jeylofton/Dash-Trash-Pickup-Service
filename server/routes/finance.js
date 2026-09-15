@@ -224,15 +224,21 @@ router.get('/payroll', requirePermission('payroll.pay.view'), (req, res) => {
     ? { start: req.query.from, end: req.query.to }
     : currentPayPeriod();
 
-  const rows = laborByEmployee(period.start, period.end).map(e => ({
-    employeeId: e.employee_id,
-    name: `${e.first_name} ${e.last_name}`,
-    payType: e.pay_type,
-    rate: dollars(e.rate_cents),
-    shifts: e.shifts,
-    hours: Math.round(e.minutes / 6) / 10,
-    estimatedPay: dollars(e.cents),
-  }));
+  const rows = laborByEmployee(period.start, period.end).map(e => {
+    const emp = one(`SELECT worker_type FROM employees WHERE id = ?`, e.employee_id);
+    const banking = one(`SELECT direct_deposit FROM employee_banking WHERE employee_id = ?`, e.employee_id);
+    return {
+      employeeId: e.employee_id,
+      name: `${e.first_name} ${e.last_name}`,
+      payType: e.pay_type,
+      rate: dollars(e.rate_cents),
+      shifts: e.shifts,
+      hours: Math.round(e.minutes / 6) / 10,
+      estimatedPay: dollars(e.cents),
+      workerType: emp?.worker_type || 'W2',
+      directDepositConfigured: Boolean(banking),
+    };
+  });
 
   res.json({
     period,
