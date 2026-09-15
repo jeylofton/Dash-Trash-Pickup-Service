@@ -68,7 +68,10 @@ function tableView(id, headers, rows) {
    One y-axis only. Never a second scale.
    ============================================================ */
 export function lineChart(el, { data, series, xKey = 'bucket', title, height = 230 }) {
-  if (!data?.length) { el.innerHTML = `<div class="empty">No data for this range.</div>`; return; }
+  if (!data?.length) {
+    el.innerHTML = `${title ? `<h3 class="chart-title">${esc(title)}</h3>` : ''}<div class="empty chart-empty">No data for this range.</div>`;
+    return;
+  }
 
   const id = uid();
   const W = 760, H = height, PAD = { t: 14, r: 74, b: 30, l: 58 };
@@ -170,7 +173,10 @@ export function barChart(el, { data, title, valueKey = 'amount', labelKey = 'lab
   const fmt = unit === 'count'
     ? (n) => Math.round(n).toLocaleString()
     : money;
-  if (!data?.length) { el.innerHTML = `<div class="empty">No data for this range.</div>`; return; }
+  if (!data?.length) {
+    el.innerHTML = `${title ? `<h3 class="chart-title">${esc(title)}</h3>` : ''}<div class="empty chart-empty">No data for this range.</div>`;
+    return;
+  }
 
   const id = uid();
   // Past `max` entries, fold the tail into "Other" rather than inventing hues.

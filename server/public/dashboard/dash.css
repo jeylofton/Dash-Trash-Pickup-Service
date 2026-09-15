@@ -134,6 +134,25 @@ main { padding:clamp(16px,3vw,28px); max-width:1400px; margin-inline:auto; }
 }
 .card + .card { margin-top:14px; }
 .stat-grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); }
+/* Dashboard KPI grid: an even six-across layout so the 12 cards form two full
+   rows (Intro Customers lands directly under Active Customers) with no empty
+   space on the right. Collapses responsively on narrower screens. */
+#statGrid { grid-template-columns:repeat(6,minmax(0,1fr)); gap:16px; }
+@media (max-width:1200px){ #statGrid { grid-template-columns:repeat(4,minmax(0,1fr)); } }
+@media (max-width:760px){ #statGrid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media (max-width:480px){ #statGrid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+/* Financials summary grid: 11 cards split as 7 + 4. Use a 28-column track
+   (LCM of 7 and 4) so row 1's 7 cards each span 4 and row 2's 4 cards each
+   span 7 — both rows fill the full content width evenly with no empty gap on
+   the right. Collapses responsively on narrower screens. */
+#finStats { grid-template-columns:repeat(28,minmax(0,1fr)); }
+#finStats > .stat:nth-child(-n+7) { grid-column:span 4; }
+#finStats > .stat:nth-child(n+8) { grid-column:span 7; }
+@media (max-width:1100px){
+  #finStats { grid-template-columns:repeat(4,minmax(0,1fr)); }
+  #finStats > .stat { grid-column:auto; }
+}
+@media (max-width:640px){ #finStats { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .stat { background:var(--white); border:1px solid var(--line); border-radius:var(--radius); padding:15px 17px; display:flex; flex-direction:column; }
 /* Reserve room for a two-line label so a wrapping label (e.g. "Employees
    assigned") never pushes its value below neighbouring cards' values. */
@@ -212,6 +231,9 @@ label { font-size:.8rem; font-weight:800; display:block; margin-bottom:5px; }
 .msg.ok { background:rgba(46,111,85,.1); color:var(--ok); }
 .msg.warn { background:rgba(176,106,18,.12); color:var(--warn); }
 .empty { padding:34px; text-align:center; color:var(--muted); }
+/* Empty chart cards get a fixed, centered height so every "No data" card in a
+   grid row is identical and the text lines up regardless of chart type. */
+.chart-empty { min-height:200px; padding:16px; display:flex; align-items:center; justify-content:center; }
 .muted { color:var(--muted); }
 .small { font-size:.82rem; }
 
@@ -328,6 +350,10 @@ label { font-size:.8rem; font-weight:800; display:block; margin-bottom:5px; }
    column-width and aligned to the grid, instead of stretching to fill the
    row. margin-block gives the grid the same 14px rhythm as adjacent cards. */
 .chart-grid { display:grid; gap:14px; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); margin-block:14px; }
+/* The grid's own `gap` handles spacing, so the stacked-card `.card + .card`
+   margin must not leak onto grid items — it offsets only the non-first card
+   in each row and breaks alignment. */
+.chart-grid > .card + .card { margin-top:0; }
 .range-bar { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
 .range-bar button {
   background:var(--white); border:1px solid var(--line); border-radius:999px;

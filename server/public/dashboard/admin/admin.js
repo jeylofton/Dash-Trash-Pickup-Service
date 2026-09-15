@@ -1000,7 +1000,10 @@ async function showEmployee(id) {
           ? '<span class="pill ok">Enabled</span>' : '<span class="pill bad">Disabled</span>'}</td></tr>
         <tr><th>Historical records</th><td><span class="pill">Available</span></td></tr>
       </table>
-      <div id="workerLcZone" style="margin-top:14px"></div>
+      <div class="form-actions-bar">
+        <button class="btn btn-primary" id="workerEditBtn">Edit</button>
+      </div>
+      <div id="workerLcZone" style="margin-top:14px" hidden></div>
     </div>
 
     ${d.periods && d.periods.length > 1 ? `
@@ -1245,14 +1248,30 @@ async function showEmployee(id) {
   };
   $('#backToEmps').addEventListener('click', () => backToEmployees());
 
-  /* Worker employment actions run through the shared lifecycle control:
-     the current status decides what may be done, one action at a time,
-     each confirmed and recorded. Nothing here deletes history. */
-  lifecycleControl('#workerLcZone', {
-    actionsUrl: `/api/people/employees/${id}/actions`,
-    submitUrl:  `/api/people/employees/${id}/lifecycle`,
-    label: 'worker',
-    onDone: () => setTimeout(() => showEmployee(id), 700),
+  /* The action menu stays hidden until the admin chooses to Edit. The
+     default view is read-only worker status; Edit reveals the shared
+     lifecycle control (status decides what may be done, one action at a
+     time, each confirmed and recorded — nothing here deletes history). */
+  const workerEditBtn = $('#workerEditBtn');
+  const workerLcZone = $('#workerLcZone');
+  workerEditBtn.addEventListener('click', () => {
+    workerEditBtn.hidden = true;
+    workerLcZone.hidden = false;
+    lifecycleControl('#workerLcZone', {
+      actionsUrl: `/api/people/employees/${id}/actions`,
+      submitUrl:  `/api/people/employees/${id}/lifecycle`,
+      label: 'worker',
+      onDone: (res, actionKey) => {
+        // Close returns to the read-only view; a real action reloads the
+        // record so the new status shows.
+        if (actionKey === 'closed') {
+          workerLcZone.hidden = true;
+          workerEditBtn.hidden = false;
+        } else {
+          setTimeout(() => showEmployee(id), 700);
+        }
+      },
+    });
   });
 
   /* Opening an employee shows their record. Editing is a separate,
