@@ -1819,7 +1819,8 @@ async function loadPayroll() {
          <td class="num"><strong>${money(pr.totalEstimatedPay)}</strong></td></tr>`);
 
   if (!$('#compEmp').options.length) {
-    $('#compEmp').innerHTML = emps.map(e =>
+    // Only active workers take new pay records — former workers drop out.
+    $('#compEmp').innerHTML = emps.filter(e => e.status === 'active').map(e =>
       `<option value="${e.id}">${esc(e.first_name)} ${esc(e.last_name)}</option>`).join('');
   }
 
