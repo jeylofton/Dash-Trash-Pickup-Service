@@ -284,6 +284,7 @@ async function loadIssues() {
 
 async function loadProfile() {
   const p = await api('/api/employee/profile');
+  const bk = p.banking;
   $('#profileCard').innerHTML = `
     <h2>${esc(p.user.firstName)} ${esc(p.user.lastName)}</h2>
     <p class="muted small">${esc(p.user.email)}${p.user.phone ? ' · ' + esc(p.user.phone) : ''}</p>
@@ -292,9 +293,103 @@ async function loadProfile() {
     ${p.routes.length ? p.routes.map(r =>
       `<div class="small">• ${esc(r.dayName)} — ${esc(r.name)}</div>`).join('')
       : '<p class="muted small">No routes assigned.</p>'}
+
+    <h3 style="margin-top:20px">Payroll &amp; Banking</h3>
+    ${bk ? `
+      <table>
+        <tr><th>Account holder</th><td>${esc(bk.accountHolderName)}</td></tr>
+        <tr><th>Bank</th><td>${esc(bk.bankName)}</td></tr>
+        <tr><th>Account type</th><td>${esc(bk.accountType)}</td></tr>
+        <tr><th>Routing</th><td>···· ${esc(bk.routingLast4)}</td></tr>
+        <tr><th>Account</th><td>···· ${esc(bk.accountLast4)}</td></tr>
+        <tr><th>Direct deposit</th><td>${bk.directDeposit
+          ? '<span class="pill ok">Enabled</span>'
+          : '<span class="pill">Disabled</span>'}</td></tr>
+      </table>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="myEditBankBtn">Update banking info</button>
+        <button class="btn" id="myToggleDDBtn">${bk.directDeposit ? 'Disable' : 'Enable'} direct deposit</button>
+      </div>
+    ` : `
+      <p class="muted small">No banking information on file.</p>
+      <button class="btn btn-primary" id="myEditBankBtn">Add banking info</button>
+    `}
+    <div id="myBankForm" hidden>
+      <h4 style="margin-top:14px">${bk ? 'Update' : 'Add'} banking information</h4>
+      <div class="row">
+        <div><label for="myBkHolder">Account holder name</label>
+          <input id="myBkHolder" value="${esc(bk?.accountHolderName || (p.user.firstName + ' ' + p.user.lastName))}" /></div>
+        <div><label for="myBkBank">Bank name</label>
+          <input id="myBkBank" value="${esc(bk?.bankName || '')}" /></div>
+      </div>
+      <div class="row">
+        <div><label for="myBkType">Account type</label>
+          <select id="myBkType">
+            <option value="checking" ${bk?.accountType === 'checking' ? 'selected' : ''}>Checking</option>
+            <option value="savings" ${bk?.accountType === 'savings' ? 'selected' : ''}>Savings</option>
+          </select></div>
+        <div><label for="myBkRouting">Routing number</label>
+          <input id="myBkRouting" maxlength="9" placeholder="9 digits" /></div>
+      </div>
+      <div class="row">
+        <div><label for="myBkAcct">Account number</label>
+          <input id="myBkAcct" placeholder="4–17 digits" /></div>
+        <div><label for="myBkConfirm">Confirm account number</label>
+          <input id="myBkConfirm" placeholder="Re-enter account number" /></div>
+      </div>
+      <div class="row">
+        <div><label><input type="checkbox" id="myBkDD" ${bk?.directDeposit ? 'checked' : ''} /> Enable direct deposit</label></div>
+      </div>
+      <p class="msg" id="myBkMsg" hidden></p>
+      <button class="btn btn-primary" id="myBkSave">Save banking info</button>
+      <button class="btn" id="myBkCancel">Cancel</button>
+    </div>
+
     <p class="muted small" style="margin-top:16px">
       You cannot see or change customer billing information.
     </p>`;
+
+  const editBtn = $('#myEditBankBtn');
+  if (editBtn) editBtn.addEventListener('click', () => {
+    $('#myBankForm').hidden = false;
+    editBtn.hidden = true;
+  });
+  const cancelBtn = $('#myBkCancel');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => {
+    $('#myBankForm').hidden = true;
+    if (editBtn) editBtn.hidden = false;
+  });
+  const toggleDD = $('#myToggleDDBtn');
+  if (toggleDD) toggleDD.addEventListener('click', async () => {
+    try {
+      await api('/api/employee/banking', {
+        method: 'PATCH', body: JSON.stringify({ directDeposit: !bk.directDeposit }),
+      });
+      loadProfile();
+    } catch (ex) { alert(ex.message); }
+  });
+  const saveBtn = $('#myBkSave');
+  if (saveBtn) saveBtn.addEventListener('click', async () => {
+    const msg = $('#myBkMsg');
+    try {
+      const account = $('#myBkAcct').value.trim();
+      const confirm = $('#myBkConfirm').value.trim();
+      if (account !== confirm) throw new Error('Account numbers do not match.');
+      await api('/api/employee/banking', {
+        method: 'PUT',
+        body: JSON.stringify({
+          accountHolderName: $('#myBkHolder').value.trim(),
+          bankName: $('#myBkBank').value.trim(),
+          accountType: $('#myBkType').value,
+          routingNumber: $('#myBkRouting').value.trim(),
+          accountNumber: account,
+          confirmAccountNumber: confirm,
+          directDeposit: $('#myBkDD').checked,
+        }),
+      });
+      loadProfile();
+    } catch (ex) { msg.textContent = ex.message; msg.className = 'msg error'; msg.hidden = false; }
+  });
 }
 
 loadToday();

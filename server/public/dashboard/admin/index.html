@@ -228,6 +228,10 @@
         <div class="toolbar">
           <div style="flex:2 1 240px"><label for="empSearch">Search</label>
             <input id="empSearch" placeholder="Name, email, or code" /></div>
+          <div><label for="empWorkerTypeFilter">Worker type</label>
+            <select id="empWorkerTypeFilter"><option value="">All workers</option>
+              <option value="W2">W-2 Employees</option>
+              <option value="1099">1099 Contractors</option></select></div>
           <div><label for="empStatusFilter">Status</label>
             <select id="empStatusFilter"><option value="">All</option><option>active</option>
               <option>inactive</option><option>on_leave</option><option>terminated</option>
@@ -243,6 +247,8 @@
             <div><label for="nePhone">Phone</label><input id="nePhone" type="tel" /></div>
           </div>
           <div class="row">
+            <div><label for="neWorkerType">Worker type</label>
+              <select id="neWorkerType"><option value="W2">W-2 Employee</option><option value="1099">1099 Contractor</option></select></div>
             <div><label for="neCode">Employee code</label><input id="neCode" placeholder="EMP-004" /></div>
             <div><label for="neHire">Hire date</label><input id="neHire" type="date" /></div>
             <div><label for="nePayType">Pay type</label>

@@ -20,6 +20,7 @@ import { rateOn, currentPayPeriod, entryPayCents, MINUTES_SQL } from '../lib/tim
 import { laborByEmployee, dollars } from '../lib/finance.js';
 import { today, DAY_NAMES } from '../lib/schedule.js';
 import { deletability, assertDeletable } from '../lib/deletable.js';
+import { encrypt, decrypt, encryptionAvailable } from '../lib/encryption.js';
 
 export const router = Router();
 router.use(requirePermission('employees.view','system.users.manage'));
@@ -46,15 +47,18 @@ function diff(before, after) {
    ============================================================ */
 
 router.get('/employees', (req, res) => {
-  const { q, status } = req.query;
+  const { q, status, workerType } = req.query;
   const where = [], params = [];
   if (q) { where.push('(u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ? OR e.employee_code LIKE ?)');
            params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`); }
   if (status) { where.push('e.status = ?'); params.push(status); }
-  where.push('e.is_demo = 0');   // training employee never appears in the owner's list
+  if (workerType && ['W2', '1099'].includes(workerType)) {
+    where.push('e.worker_type = ?'); params.push(workerType);
+  }
+  where.push('e.is_demo = 0');
 
   res.json(all(`
-    SELECT e.id, e.employee_code, e.hire_date, e.status, e.end_date,
+    SELECT e.id, e.employee_code, e.hire_date, e.status, e.end_date, e.worker_type,
            u.id AS user_id, u.first_name, u.last_name, u.email, u.phone,
            u.status AS account_status, u.last_login_at, u.locked_until, u.must_change_password,
            p.job_title,
@@ -141,6 +145,19 @@ router.get('/employees/:id', (req, res) => {
                            FROM password_reset_events pe
                            LEFT JOIN users u ON u.id = pe.actor_user_id
                           WHERE pe.user_id = ? ORDER BY pe.created_at DESC LIMIT 10`, emp.user_id),
+    banking: (() => {
+      const b = one('SELECT * FROM employee_banking WHERE employee_id = ?', emp.id);
+      if (!b) return null;
+      return {
+        accountHolderName: b.account_holder_name,
+        bankName: b.bank_name,
+        accountType: b.account_type,
+        accountLast4: b.account_last4,
+        routingLast4: b.routing_last4,
+        directDeposit: Boolean(b.direct_deposit),
+        updatedAt: b.updated_at,
+      };
+    })(),
   });
 });
 
@@ -168,10 +185,11 @@ router.post('/employees', requirePermission('employees.create'), async (req, res
        VALUES (?, ?, 'employee', ?, ?, ?, ?, datetime('now'))`,
       b.email, hash, b.firstName, b.lastName, b.phone ?? null, temporary ? 1 : 0).lastInsertRowid;
 
+    const workerType = b.workerType === '1099' ? '1099' : 'W2';
     const eid = run(
-      `INSERT INTO employees (user_id, employee_code, hire_date, status)
-       VALUES (?, ?, ?, ?)`,
-      uid, b.employeeCode ?? null, b.hireDate ?? today(), b.status ?? 'active').lastInsertRowid;
+      `INSERT INTO employees (user_id, employee_code, hire_date, status, worker_type)
+       VALUES (?, ?, ?, ?, ?)`,
+      uid, b.employeeCode ?? null, b.hireDate ?? today(), b.status ?? 'active', workerType).lastInsertRowid;
 
     run(`INSERT INTO employee_profiles
            (employee_id, address, city, state, zip, emergency_contact_name,
@@ -229,18 +247,21 @@ router.patch('/employees/:id', requirePermission('employees.edit'), (req, res) =
           b.firstName ?? null, b.lastName ?? null, b.email ?? null, b.phone ?? null, emp.user_id);
     }
 
+    const validWorkerType = b.workerType && ['W2', '1099'].includes(b.workerType) ? b.workerType : undefined;
     const empChanges = diff(
-      { status: emp.status, employee_code: emp.employee_code, hire_date: emp.hire_date },
-      { status: b.status, employee_code: b.employeeCode, hire_date: b.hireDate });
+      { status: emp.status, employee_code: emp.employee_code, hire_date: emp.hire_date, worker_type: emp.worker_type },
+      { status: b.status, employee_code: b.employeeCode, hire_date: b.hireDate, worker_type: validWorkerType });
 
     if (Object.keys(empChanges).length) {
       run(`UPDATE employees SET status = COALESCE(?, status),
                                 employee_code = COALESCE(?, employee_code),
                                 hire_date = COALESCE(?, hire_date),
+                                worker_type = COALESCE(?, worker_type),
                                 end_date = CASE WHEN ? IN ('terminated','archived')
                                                 THEN COALESCE(end_date, date('now')) ELSE NULL END
             WHERE id = ?`,
-          b.status ?? null, b.employeeCode ?? null, b.hireDate ?? null, b.status ?? emp.status, emp.id);
+          b.status ?? null, b.employeeCode ?? null, b.hireDate ?? null,
+          validWorkerType ?? null, b.status ?? emp.status, emp.id);
 
       // Leaving 'active' must also close the login, or a terminated employee
       // could still sign in and record pickups.
@@ -288,6 +309,110 @@ router.post('/employees/:id/notes', (req, res) => {
                  req.params.id, req.user.id, body).lastInsertRowid;
   audit(req, 'employee.note_added', { entityType: 'employee', entityId: Number(req.params.id) });
   res.status(201).json({ id });
+});
+
+/* ============================================================
+   Banking
+   ============================================================ */
+
+router.get('/employees/:id/banking', requirePermission('employees.banking.view'), (req, res) => {
+  const emp = one('SELECT id FROM employees WHERE id = ?', req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found.' });
+
+  const b = one('SELECT * FROM employee_banking WHERE employee_id = ?', emp.id);
+  if (!b) return res.json(null);
+
+  const result = {
+    accountHolderName: b.account_holder_name,
+    bankName: b.bank_name,
+    accountType: b.account_type,
+    accountLast4: b.account_last4,
+    routingLast4: b.routing_last4,
+    directDeposit: Boolean(b.direct_deposit),
+    updatedAt: b.updated_at,
+  };
+
+  if (req.query.full === 'true' && encryptionAvailable()) {
+    try {
+      result.routingNumber = decrypt(b.routing_number_enc);
+      result.accountNumber = decrypt(b.account_number_enc);
+    } catch { /* decryption failure — return masked only */ }
+  }
+
+  res.json(result);
+});
+
+router.put('/employees/:id/banking', requirePermission('employees.banking.edit'), (req, res) => {
+  if (!encryptionAvailable()) {
+    return res.status(503).json({ error: 'Banking features require encryption configuration.' });
+  }
+  const emp = one('SELECT id FROM employees WHERE id = ?', req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found.' });
+
+  const b = req.body || {};
+  if (!b.accountHolderName || !b.bankName || !b.accountType ||
+      !b.routingNumber || !b.accountNumber || !b.confirmAccountNumber) {
+    return res.status(400).json({ error: 'All banking fields are required.' });
+  }
+  if (!['checking', 'savings'].includes(b.accountType)) {
+    return res.status(400).json({ error: 'Account type must be checking or savings.' });
+  }
+  if (!/^\d{9}$/.test(b.routingNumber)) {
+    return res.status(400).json({ error: 'Routing number must be 9 digits.' });
+  }
+  if (!/^\d{4,17}$/.test(b.accountNumber)) {
+    return res.status(400).json({ error: 'Account number must be 4–17 digits.' });
+  }
+  if (b.accountNumber !== b.confirmAccountNumber) {
+    return res.status(400).json({ error: 'Account numbers do not match.' });
+  }
+
+  const routingEnc = encrypt(b.routingNumber);
+  const accountEnc = encrypt(b.accountNumber);
+  const routingLast4 = b.routingNumber.slice(-4);
+  const accountLast4 = b.accountNumber.slice(-4);
+
+  const existing = one('SELECT employee_id FROM employee_banking WHERE employee_id = ?', emp.id);
+  if (existing) {
+    run(`UPDATE employee_banking SET account_holder_name = ?, bank_name = ?, account_type = ?,
+            routing_number_enc = ?, account_number_enc = ?, routing_last4 = ?, account_last4 = ?,
+            direct_deposit = ?, updated_at = datetime('now')
+          WHERE employee_id = ?`,
+        b.accountHolderName, b.bankName, b.accountType,
+        routingEnc, accountEnc, routingLast4, accountLast4,
+        b.directDeposit ? 1 : 0, emp.id);
+  } else {
+    run(`INSERT INTO employee_banking (employee_id, account_holder_name, bank_name, account_type,
+            routing_number_enc, account_number_enc, routing_last4, account_last4, direct_deposit)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        emp.id, b.accountHolderName, b.bankName, b.accountType,
+        routingEnc, accountEnc, routingLast4, accountLast4,
+        b.directDeposit ? 1 : 0);
+  }
+
+  audit(req, 'employee.banking_updated', {
+    entityType: 'employee', entityId: emp.id,
+    detail: { bankName: b.bankName, accountType: b.accountType, accountLast4 },
+  });
+  res.json({ ok: true });
+});
+
+router.patch('/employees/:id/banking', requirePermission('employees.banking.edit'), (req, res) => {
+  const emp = one('SELECT id FROM employees WHERE id = ?', req.params.id);
+  if (!emp) return res.status(404).json({ error: 'Employee not found.' });
+  const existing = one('SELECT * FROM employee_banking WHERE employee_id = ?', emp.id);
+  if (!existing) return res.status(404).json({ error: 'No banking information on file.' });
+
+  const b = req.body || {};
+  if (b.directDeposit !== undefined) {
+    run('UPDATE employee_banking SET direct_deposit = ?, updated_at = datetime(?) WHERE employee_id = ?',
+        b.directDeposit ? 1 : 0, 'now', emp.id);
+    audit(req, 'employee.direct_deposit_toggled', {
+      entityType: 'employee', entityId: emp.id,
+      detail: { directDeposit: Boolean(b.directDeposit) },
+    });
+  }
+  res.json({ ok: true });
 });
 
 /* ============================================================
@@ -464,6 +589,7 @@ router.delete('/employees/:id', requirePermission('employees.archive'), (req, re
   }
 
   tx(() => {
+    run('DELETE FROM employee_banking WHERE employee_id = ?', e.id);
     run('DELETE FROM employee_profiles WHERE employee_id = ?', e.id);
     run('DELETE FROM employee_notes WHERE employee_id = ?', e.id);
     run('DELETE FROM employees WHERE id = ?', e.id);

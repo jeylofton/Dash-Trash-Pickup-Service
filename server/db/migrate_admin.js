@@ -416,6 +416,59 @@ export function migrateAdminControls() {
 }
 
 
+/** Worker type classification + banking table for payroll. */
+export function migrateWorkerBanking() {
+  const changes = [];
+
+  if (!columns('employees').includes('worker_type')) {
+    addColumn('employees', 'worker_type', "TEXT NOT NULL DEFAULT 'W2'");
+    changes.push('employees.worker_type added');
+  }
+
+  const hasBanking = one(`SELECT name FROM sqlite_master WHERE type='table' AND name='employee_banking'`);
+  if (!hasBanking) {
+    db.exec(`
+      CREATE TABLE employee_banking (
+        employee_id          INTEGER PRIMARY KEY REFERENCES employees(id) ON DELETE CASCADE,
+        account_holder_name  TEXT NOT NULL,
+        bank_name            TEXT NOT NULL,
+        account_type         TEXT NOT NULL CHECK(account_type IN ('checking','savings')),
+        routing_number_enc   TEXT NOT NULL,
+        account_number_enc   TEXT NOT NULL,
+        account_last4        TEXT NOT NULL,
+        routing_last4        TEXT NOT NULL,
+        direct_deposit       INTEGER NOT NULL DEFAULT 0,
+        created_at           TEXT DEFAULT (datetime('now')),
+        updated_at           TEXT DEFAULT (datetime('now'))
+      )`);
+    changes.push('employee_banking table created');
+  }
+
+  const bankingPerms = [
+    ['employees.banking.view', 'Employees', 'View worker banking information', 38],
+    ['employees.banking.edit', 'Employees', 'Add/update worker banking information', 39],
+  ];
+  for (const [key, cat, label, sort] of bankingPerms) {
+    const exists = one('SELECT key FROM permissions WHERE key = ?', key);
+    if (!exists) {
+      db.prepare('INSERT INTO permissions (key, category, label, sort_order) VALUES (?, ?, ?, ?)')
+        .run(key, cat, label, sort);
+      changes.push(`permission ${key} added`);
+    }
+  }
+
+  for (const perm of ['employees.banking.view', 'employees.banking.edit']) {
+    const exists = one('SELECT permission FROM role_permissions WHERE role_key = ? AND permission = ?',
+      'manager', perm);
+    if (!exists) {
+      db.prepare('INSERT OR IGNORE INTO role_permissions (role_key, permission, allowed) VALUES (?, ?, 1)')
+        .run('manager', perm);
+    }
+  }
+
+  return changes;
+}
+
 /** Remove the fixed users.role CHECK — roles are rows now, not constants. */
 export function migrateDynamicRoles() {
   const ddl = one(`SELECT sql FROM sqlite_master WHERE type='table' AND name='users'`)?.sql || '';
