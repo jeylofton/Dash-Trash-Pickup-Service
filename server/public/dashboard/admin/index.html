@@ -233,9 +233,18 @@
               <option value="W2">W-2 Employees</option>
               <option value="1099">1099 Contractors</option></select></div>
           <div><label for="empStatusFilter">Status</label>
-            <select id="empStatusFilter"><option value="">All</option><option>active</option>
-              <option>inactive</option><option>on_leave</option><option>terminated</option>
-              <option>archived</option></select></div>
+            <select id="empStatusFilter">
+              <option value="">Active workers</option>
+              <option value="__all__">All workers</option>
+              <option value="active">Active</option>
+              <option value="suspended">Suspended</option>
+              <option value="inactive">Inactive</option>
+              <option value="on_leave">On leave</option>
+              <option value="resigned">Resigned</option>
+              <option value="terminated">Terminated</option>
+              <option value="contract_ended">Contract ended</option>
+              <option value="archived">Archived</option>
+            </select></div>
           <div style="flex:0 0 auto"><button class="btn btn-primary" id="newEmpBtn">+ Add employee</button></div>
         </div>
         <div class="card" id="newEmpCard" hidden>

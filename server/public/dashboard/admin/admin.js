@@ -921,8 +921,11 @@ $('#nrlSave').addEventListener('click', async () => {
 });
 
 /* ---------- employees ---------- */
-const EMP_STATUS_PILL = { active:'ok', inactive:'', on_leave:'warn', terminated:'bad', archived:'bad' };
-const fmtStatus = (st) => `<span class="pill ${EMP_STATUS_PILL[st] ?? ''}">${esc(String(st).replace('_',' '))}</span>`;
+const EMP_STATUS_PILL = { active:'ok', suspended:'warn', inactive:'', on_leave:'warn',
+                          resigned:'bad', terminated:'bad', contract_ended:'bad', archived:'' };
+const EMP_STATUS_LABEL = { contract_ended:'contract ended', on_leave:'on leave' };
+const fmtStatus = (st) => `<span class="pill ${EMP_STATUS_PILL[st] ?? ''}">${
+  esc(EMP_STATUS_LABEL[st] ?? String(st).replace('_',' '))}</span>`;
 const hrs = (mins) => (mins / 60).toFixed(1);
 
 const workerTypeBadge = (wt) => wt === '1099'
@@ -983,6 +986,52 @@ async function showEmployee(id) {
         <div style="flex:0 0 auto"><button class="btn btn-primary" id="editEmpBtn">Edit employee</button></div>
       </div>
     </div>
+
+    <div class="card" id="workerStatusCard">
+      <h2>Worker Status &amp; Actions</h2>
+      <table>
+        <tr><th>Worker type</th><td>${workerTypeBadge(e.worker_type)}</td></tr>
+        <tr><th>Status</th><td><span class="pill ${esc(d.lifecycle.statusTone)}">${esc(d.lifecycle.statusLabel)}</span></td></tr>
+        ${d.lifecycle.statusEffectiveDate ? `<tr><th>Effective</th><td>${fmtDate(d.lifecycle.statusEffectiveDate)}</td></tr>` : ''}
+        ${d.lifecycle.statusReason ? `<tr><th>Reason</th><td>${esc(d.lifecycle.statusReason)}</td></tr>` : ''}
+        ${d.lifecycle.suspensionEndDate ? `<tr><th>Expected return</th><td>${fmtDate(d.lifecycle.suspensionEndDate)}</td></tr>` : ''}
+        ${d.lifecycle.endDate ? `<tr><th>End date</th><td>${fmtDate(d.lifecycle.endDate)}</td></tr>` : ''}
+        <tr><th>Login</th><td>${d.lifecycle.accountLogin === 'enabled'
+          ? '<span class="pill ok">Enabled</span>' : '<span class="pill bad">Disabled</span>'}</td></tr>
+        <tr><th>Historical records</th><td><span class="pill">Available</span></td></tr>
+      </table>
+      <div id="workerLcZone" style="margin-top:14px"></div>
+    </div>
+
+    ${d.periods && d.periods.length > 1 ? `
+    <div class="card">
+      <h2>Employment periods</h2>
+      <table>
+        <tr><th>Started</th><th>Ended</th><th>Type</th><th>How it ended</th></tr>
+        ${d.periods.map(pr => `<tr>
+          <td>${fmtDate(pr.start_date)}</td>
+          <td>${pr.end_date ? fmtDate(pr.end_date) : '<em>current</em>'}</td>
+          <td>${workerTypeBadge(pr.worker_type)}</td>
+          <td class="small muted">${esc(pr.end_reason || pr.end_action || '—')}</td>
+        </tr>`).join('')}
+      </table>
+    </div>` : ''}
+
+    ${d.statusHistory && d.statusHistory.length ? `
+    <div class="card">
+      <h2>Status history</h2>
+      <table>
+        <tr><th>When</th><th>Change</th><th>Action</th><th>Effective</th><th>Reason / notes</th><th>By</th></tr>
+        ${d.statusHistory.map(h => `<tr>
+          <td class="small">${fmtDate(h.created_at)}</td>
+          <td class="small">${esc(h.fromLabel)} → <strong>${esc(h.toLabel)}</strong></td>
+          <td class="small muted">${esc(h.action)}</td>
+          <td class="small">${h.effective_date ? fmtDate(h.effective_date) : '—'}</td>
+          <td class="small">${esc(h.reason || h.note || '—')}</td>
+          <td class="small muted">${esc([h.first_name, h.last_name].filter(Boolean).join(' ') || 'system')}</td>
+        </tr>`).join('')}
+      </table>
+    </div>` : ''}
 
     <div class="chart-grid">
       <div class="card">
@@ -1167,9 +1216,6 @@ async function showEmployee(id) {
         <div><label>Employee code</label><input id="edCode" value="${esc(e.employee_code || '')}" /></div>
       </div>
       <div class="row">
-        <div><label>Employment status</label>
-          <select id="edStatus">${['active','inactive','on_leave','terminated','archived']
-            .map(v => `<option value="${v}" ${v === e.status ? 'selected' : ''}>${v.replace('_',' ')}</option>`).join('')}</select></div>
         <div><label>Vehicle</label><input id="edVehicle" value="${esc(p.vehicle_assignment || '')}" /></div>
         <div><label>Uniform size</label><input id="edUniform" value="${esc(p.uniform_size || '')}" /></div>
         <div><label>Background check</label>
@@ -1198,6 +1244,16 @@ async function showEmployee(id) {
     if (await sections.employees.close({ force })) await loadEmployees();
   };
   $('#backToEmps').addEventListener('click', () => backToEmployees());
+
+  /* Worker employment actions run through the shared lifecycle control:
+     the current status decides what may be done, one action at a time,
+     each confirmed and recorded. Nothing here deletes history. */
+  lifecycleControl('#workerLcZone', {
+    actionsUrl: `/api/people/employees/${id}/actions`,
+    submitUrl:  `/api/people/employees/${id}/lifecycle`,
+    label: 'worker',
+    onDone: () => setTimeout(() => showEmployee(id), 700),
+  });
 
   /* Opening an employee shows their record. Editing is a separate,
      deliberate step, and the form it opens is a draft. */
@@ -1240,7 +1296,7 @@ async function showEmployee(id) {
           state: $('#edState').value, zip: $('#edZip').value,
           emergencyContactName: $('#edEcName').value, emergencyContactPhone: $('#edEcPhone').value,
           jobTitle: $('#edTitle').value, employeeCode: $('#edCode').value,
-          status: $('#edStatus').value, vehicleAssignment: $('#edVehicle').value,
+          vehicleAssignment: $('#edVehicle').value,
           uniformSize: $('#edUniform').value,
           backgroundCheckStatus: $('#edBg').value || undefined,
           workerType: $('#edWorkerType').value,
